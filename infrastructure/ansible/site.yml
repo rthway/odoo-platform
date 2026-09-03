@@ -139,6 +139,8 @@
         version: "{{ app_repo_version }}"
         force: true
         depth: 50
+      # git comes from roles/common in this same play.
+      when: not ansible_check_mode
 
     # env-ops.j2, not env.j2: the observability stack needs Grafana
     # credentials and alert routing, not database settings.
@@ -150,6 +152,8 @@
         group: "{{ deploy_user }}"
         mode: "0600"
       no_log: true
+      # The target directory comes from the clone above.
+      when: not ansible_check_mode
 
     - name: Create the node_exporter textfile collector directory on OPS
       ansible.builtin.file:
