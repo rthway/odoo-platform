@@ -1,0 +1,92 @@
+---
+# ===========================================================================
+# backup_schedule - scheduled backup, verification and pruning
+# ===========================================================================
+# Every job writes to a log AND to node_exporter's textfile collector, so a
+# job that stops running becomes an alert rather than a discovery made during
+# a restore.
+# ===========================================================================
+
+- name: Ensure the backup directory exists
+  ansible.builtin.file:
+    path: "{{ backup_dir }}/{{ env_name }}"
+    state: directory
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_user }}"
+    mode: "0700"
+
+# ---------------------------------------------------------------------------
+# Daily backup
+# ---------------------------------------------------------------------------
+- name: Schedule the daily backup
+  ansible.builtin.cron:
+    name: "odoo-backup-{{ env_name }}"
+    user: "{{ deploy_user }}"
+    hour: "{{ backup_hour }}"
+    minute: "{{ backup_minute }}"
+    job: >-
+      cd {{ app_dir }} &&
+      ./scripts/backup.sh -e {{ env_name }} -l daily
+      >> {{ backup_dir }}/backup.log 2>&1
+    state: present
+
+# ---------------------------------------------------------------------------
+# Weekly verification - a real restore into a throwaway container
+# ---------------------------------------------------------------------------
+# Checksums run after every backup; this proves PostgreSQL can actually read
+# the dump. Without it, "we have backups" is an assumption.
+- name: Schedule the weekly restore verification
+  ansible.builtin.cron:
+    name: "odoo-backup-verify-{{ env_name }}"
+    user: "{{ deploy_user }}"
+    weekday: "{{ verify_weekday }}"
+    hour: "{{ verify_hour }}"
+    minute: "0"
+    job: >-
+      cd {{ app_dir }} &&
+      ./scripts/verify-backup.sh
+      -s "$(ls -1d {{ backup_dir }}/{{ env_name }}/*/ | tail -1)" --restore
+      >> {{ backup_dir }}/verify.log 2>&1
+    state: present
+
+# ---------------------------------------------------------------------------
+# Pruning
+# ---------------------------------------------------------------------------
+# Runs AFTER the backup and AFTER verification, never before: pruning first
+# could delete the last good set before a new one exists.
+- name: Schedule retention pruning
+  ansible.builtin.cron:
+    name: "odoo-backup-prune-{{ env_name }}"
+    user: "{{ deploy_user }}"
+    hour: "{{ prune_hour }}"
+    minute: "30"
+    job: >-
+      cd {{ app_dir }} &&
+      ./scripts/prune-backups.sh -e {{ env_name }} --apply
+      >> {{ backup_dir }}/prune.log 2>&1
+    state: present
+
+# ---------------------------------------------------------------------------
+- name: Rotate the backup logs
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/odoo-backup
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      {{ backup_dir }}/*.log {
+          monthly
+          rotate 12
+          compress
+          missingok
+          notifempty
+          create 0640 {{ deploy_user }} {{ deploy_user }}
+      }
+
+- name: Warn when no off-site target is configured
+  ansible.builtin.debug:
+    msg: >-
+      BACKUP_OFFSITE_TARGET is empty for {{ env_name }}. Backups exist only
+      inside this infrastructure, so 3-2-1 is NOT satisfied and a site-level
+      event would take the backups with the primary. See docs/backup.md.
+  when: (backup_offsite_target | default('')) == ''

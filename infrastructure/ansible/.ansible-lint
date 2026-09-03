@@ -1,0 +1,18 @@
+---
+profile: production
+
+exclude_paths:
+  - inventory/hosts.ini
+
+skip_list:
+  # We pin base images and package repositories deliberately; apt package
+  # versions are left to the distribution's security updates, which is the
+  # point of unattended-upgrades.
+  - package-latest
+
+warn_list:
+  - experimental
+
+# The example inventory names real hosts, which is intended.
+kinds:
+  - yaml: "**/*.yml"

@@ -1,0 +1,153 @@
+---
+# ===========================================================================
+# odoo_deploy - place the application stack on a host
+# ===========================================================================
+# This role prepares a host to run a deployment. It does NOT deploy an image:
+# that is scripts/deploy.sh, driven by the GitHub Actions workflow, so that
+# every image change is auditable in one place rather than split between
+# Ansible runs and pipeline runs.
+# ===========================================================================
+
+- name: Ensure the application directory exists
+  ansible.builtin.file:
+    path: "{{ app_dir }}"
+    state: directory
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_user }}"
+    mode: "0750"
+
+- name: Clone or update the repository
+  become: true
+  become_user: "{{ deploy_user }}"
+  ansible.builtin.git:
+    repo: "{{ app_repo_url }}"
+    dest: "{{ app_dir }}"
+    version: "{{ app_repo_version }}"
+    # The working tree is never edited by hand on a server, so discarding
+    # local changes is safe and keeps hosts identical.
+    force: true
+    depth: 50
+  tags: [code]
+
+- name: Ensure scripts are executable after checkout
+  ansible.builtin.file:
+    path: "{{ app_dir }}/{{ item }}"
+    mode: "0755"
+  loop:
+    - scripts/deploy.sh
+    - scripts/rollback.sh
+    - scripts/healthcheck.sh
+    - scripts/backup.sh
+    - scripts/restore.sh
+    - scripts/verify-backup.sh
+    - scripts/prune-backups.sh
+    - scripts/migrate.sh
+  tags: [code]
+
+# ---------------------------------------------------------------------------
+# Environment file
+# ---------------------------------------------------------------------------
+# The only place real secrets land on the host. 0600 and owned by the deploy
+# user: readable by the account that runs compose, by nobody else.
+- name: Render the environment file
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ app_dir }}/.env"
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_user }}"
+    mode: "0600"
+  no_log: true
+  tags: [config, secrets]
+
+- name: Verify the environment file is not world-readable
+  ansible.builtin.stat:
+    path: "{{ app_dir }}/.env"
+  register: env_stat
+  tags: [config, secrets]
+
+- name: Fail if the environment file has loose permissions
+  ansible.builtin.assert:
+    that:
+      - env_stat.stat.mode == "0600"
+    fail_msg: >-
+      {{ app_dir }}/.env is {{ env_stat.stat.mode }}, expected 0600. It holds
+      the database and Odoo master passwords.
+  tags: [config, secrets]
+
+# ---------------------------------------------------------------------------
+# TLS
+# ---------------------------------------------------------------------------
+- name: Ensure the TLS directory exists
+  ansible.builtin.file:
+    path: "{{ app_dir }}/config/nginx/tls"
+    state: directory
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_user }}"
+    mode: "0750"
+  tags: [tls]
+
+- name: Check whether a certificate is already present
+  ansible.builtin.stat:
+    path: "{{ app_dir }}/config/nginx/tls/fullchain.pem"
+  register: tls_cert
+  tags: [tls]
+
+# A self-signed certificate keeps nginx starting in DEV/QA where no public
+# DNS name exists. Production must use a real certificate; see docs/security.md.
+- name: Generate a self-signed certificate when none exists
+  when:
+    - not tls_cert.stat.exists
+    - env_name != "prod"
+  ansible.builtin.command:
+    cmd: >-
+      openssl req -x509 -nodes -days 365 -newkey rsa:2048
+      -keyout {{ app_dir }}/config/nginx/tls/privkey.pem
+      -out {{ app_dir }}/config/nginx/tls/fullchain.pem
+      -subj "/CN={{ odoo_domain | default('localhost') }}"
+    creates: "{{ app_dir }}/config/nginx/tls/fullchain.pem"
+  tags: [tls]
+
+- name: Refuse to leave production without a real certificate
+  ansible.builtin.assert:
+    that:
+      - tls_cert.stat.exists
+    fail_msg: >-
+      No TLS certificate at {{ app_dir }}/config/nginx/tls/fullchain.pem.
+      Production must not run on a self-signed certificate. Obtain one with
+      certbot first - see docs/security.md.
+  when: env_name == "prod"
+  tags: [tls]
+
+# ---------------------------------------------------------------------------
+# systemd
+# ---------------------------------------------------------------------------
+# Ensures the stack comes back after a host reboot. Compose's restart policy
+# handles container crashes; it does nothing about the machine restarting.
+- name: Install the systemd unit
+  ansible.builtin.template:
+    src: odoo-platform.service.j2
+    dest: /etc/systemd/system/odoo-platform.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+  tags: [systemd]
+
+- name: Enable the service at boot
+  ansible.builtin.systemd:
+    name: odoo-platform
+    enabled: true
+    daemon_reload: true
+  tags: [systemd]
+
+# ---------------------------------------------------------------------------
+- name: Log in to Docker Hub for private image pulls
+  become: true
+  become_user: "{{ deploy_user }}"
+  ansible.builtin.command:
+    cmd: docker login -u {{ dockerhub_username }} --password-stdin
+    stdin: "{{ dockerhub_token }}"
+  when: dockerhub_username is defined and dockerhub_token is defined
+  no_log: true
+  changed_when: false
+  tags: [registry]

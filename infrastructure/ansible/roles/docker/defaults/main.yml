@@ -1,0 +1,7 @@
+---
+docker_users: ["{{ deploy_user }}"]
+# Bounded logs by default at the daemon level, so a container that forgets
+# to set logging limits still cannot fill the disk.
+docker_log_max_size: "20m"
+docker_log_max_file: "5"
+docker_live_restore: true

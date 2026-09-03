@@ -1,0 +1,14 @@
+---
+# Overridden per environment in group_vars/ or the inventory.
+deploy_user: deploy
+app_dir: /opt/odoo-platform
+backup_dir: /var/backups/odoo
+monitoring_server_ip: 157.10.100.232
+
+# "prohibit-password" permits key-based root login (needed while a deploy
+# account is being established). Set to "no" once that account works.
+common_permit_root_login: "prohibit-password"
+
+# TCP forwarding is how an operator tunnels to Grafana or Prometheus, which
+# are bound to localhost on OPS. Off elsewhere.
+common_allow_tcp_forwarding: false

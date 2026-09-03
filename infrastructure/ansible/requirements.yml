@@ -1,0 +1,24 @@
+---
+# ===========================================================================
+# Collections required by site.yml
+# ===========================================================================
+# Install before the first run:
+#   ansible-galaxy collection install -r requirements.yml
+#
+# Versions are floored, not pinned exactly: these are stable, widely used
+# collections, and a hard pin here would block security fixes in the modules
+# that configure the firewall and the Docker daemon.
+# ===========================================================================
+collections:
+  # ufw (firewall) - roles/common
+  - name: community.general
+    version: ">=10.0.0"
+
+  # docker_container, docker_network, docker_compose_v2
+  # - roles/monitoring_agent, the OPS observability play
+  - name: community.docker
+    version: ">=4.0.0"
+
+  # sysctl - roles/common
+  - name: ansible.posix
+    version: ">=2.0.0"

@@ -1,0 +1,184 @@
+---
+# ===========================================================================
+# site.yml - provision the fleet
+# ===========================================================================
+# Prepares hosts to RUN deployments. It never deploys an application image:
+# that is scripts/deploy.sh, driven by GitHub Actions, so image changes have
+# one audit trail instead of two.
+#
+#   ansible-playbook site.yml --limit dev          # one environment
+#   ansible-playbook site.yml --limit prod --check # dry run first, always
+#   ansible-playbook site.yml --tags firewall
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+- name: Pre-flight safety checks
+  hosts: all_servers
+  gather_facts: true
+  become: false
+  tags: [always]
+
+  tasks:
+    - name: Confirm the host is reachable
+      ansible.builtin.ping:
+
+    - name: Show what is about to be configured
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} ({{ ansible_host }}) - {{ env_name }} -
+          {{ ansible_distribution }} {{ ansible_distribution_version }},
+          {{ ansible_processor_vcpus }} vCPU,
+          {{ (ansible_memtotal_mb / 1024) | round(1) }} GB RAM
+
+    # Refuse to run against something that is not the expected distribution
+    # rather than half-configuring it and failing midway.
+    - name: Require a supported operating system
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution in ["Ubuntu", "Debian"]
+        fail_msg: >-
+          {{ inventory_hostname }} runs {{ ansible_distribution }}, which these
+          roles do not support. They assume apt and Docker's Debian packages.
+
+    # A production change is worth one extra second of deliberation.
+    - name: Announce production changes
+      ansible.builtin.debug:
+        msg: >-
+          *** This play targets PRODUCTION ({{ inventory_hostname }}). ***
+          Run with --check first if you have not already.
+      when: env_name == "prod"
+
+# ---------------------------------------------------------------------------
+- name: Baseline hardening on every server
+  hosts: all_servers
+  become: true
+  roles:
+    - role: common
+      tags: [common]
+
+# ---------------------------------------------------------------------------
+- name: Docker engine on every server
+  hosts: all_servers
+  become: true
+  roles:
+    - role: docker
+      tags: [docker]
+
+# ---------------------------------------------------------------------------
+- name: Application stack on DEV, QA and PROD
+  hosts: app
+  become: true
+  roles:
+    - role: odoo_deploy
+      tags: [app]
+    - role: backup_schedule
+      tags: [backup]
+
+# ---------------------------------------------------------------------------
+- name: Monitoring agents on the application servers
+  hosts: app
+  become: true
+  roles:
+    - role: monitoring_agent
+      tags: [monitoring]
+
+# ---------------------------------------------------------------------------
+- name: Observability stack on OPS
+  hosts: ops
+  become: true
+  tags: [observability]
+
+  tasks:
+    - name: Clone or update the repository on OPS
+      become: true
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.git:
+        repo: "{{ app_repo_url }}"
+        dest: "{{ app_dir }}"
+        version: "{{ app_repo_version }}"
+        force: true
+        depth: 50
+
+    - name: Render the observability environment file
+      ansible.builtin.template:
+        src: roles/odoo_deploy/templates/env.j2
+        dest: "{{ app_dir }}/.env"
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Start the observability stack
+      become: true
+      become_user: "{{ deploy_user }}"
+      community.docker.docker_compose_v2:
+        project_src: "{{ app_dir }}"
+        files: [compose.observability.yml]
+        state: present
+        pull: missing
+
+    - name: Wait for Grafana to become healthy
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ grafana_port | default(3000) }}/api/health"
+        status_code: 200
+      register: grafana_health
+      retries: 20
+      delay: 10
+      until: grafana_health.status == 200
+
+    - name: Report the observability endpoints
+      ansible.builtin.debug:
+        msg: >-
+          Grafana, Prometheus and Alertmanager are bound to localhost on
+          {{ ansible_host }}. Reach them over an SSH tunnel, for example:
+          ssh -L 3000:127.0.0.1:3000 {{ ansible_user }}@{{ ansible_host }}
+
+# ---------------------------------------------------------------------------
+- name: Post-run verification
+  hosts: app
+  become: false
+  tags: [verify]
+
+  tasks:
+    - name: Confirm Docker is usable by the deploy user
+      become: true
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.command: docker ps
+      changed_when: false
+
+    - name: Confirm the environment file has strict permissions
+      ansible.builtin.stat:
+        path: "{{ app_dir }}/.env"
+      register: envfile
+
+    - name: Assert the environment file is 0600
+      ansible.builtin.assert:
+        that:
+          - envfile.stat.exists
+          - envfile.stat.mode == "0600"
+        fail_msg: "{{ app_dir }}/.env is missing or not 0600"
+
+    - name: Confirm the firewall is active
+      become: true
+      ansible.builtin.command: ufw status
+      register: ufw_status
+      changed_when: false
+
+    - name: Assert the firewall is enabled
+      ansible.builtin.assert:
+        that:
+          - "'Status: active' in ufw_status.stdout"
+        fail_msg: "ufw is not active on {{ inventory_hostname }}"
+
+    - name: Confirm the backup cron entry exists
+      become: true
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.command: crontab -l
+      register: crontab_out
+      changed_when: false
+
+    - name: Assert the backup job is scheduled
+      ansible.builtin.assert:
+        that:
+          - "'odoo-backup-' + env_name in crontab_out.stdout"
+        fail_msg: "No backup cron entry on {{ inventory_hostname }}"
