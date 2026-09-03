@@ -112,8 +112,12 @@ jobs:
           set -euo pipefail
           user=$(docker inspect -f '{{ .Config.User }}' "${IMAGE_NAME}:${{ steps.meta.outputs.image-tag }}")
           echo "image user: ${user:-<empty = root>}"
-          [ -n "$user" ] && [ "$user" != "root" ] && [ "$user" != "0" ] \
-            || { echo "image would run as root"; exit 1; }
+          # An explicit if, not `A && B || C`: that construct is not
+          # if-then-else, and C also runs when A succeeds but B fails.
+          if [ -z "$user" ] || [ "$user" = "root" ] || [ "$user" = "0" ]; then
+            echo "image would run as root"
+            exit 1
+          fi
 
       # -------------------------------------------------------------------
       # Scan gate
