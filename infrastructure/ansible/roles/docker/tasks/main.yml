@@ -24,14 +24,20 @@
     dest: /etc/apt/keyrings/docker.asc
     mode: "0644"
 
+# deb822_repository, not apt_repository: the latter is deprecated and is
+# removed in ansible-core 2.25. The deb822 format also states the signing key
+# explicitly rather than encoding it in a one-line string.
 - name: Add the Docker repository
-  ansible.builtin.apt_repository:
-    repo: >-
-      deb [arch={{ ansible_architecture | replace('x86_64', 'amd64') }}
-      signed-by=/etc/apt/keyrings/docker.asc]
-      https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
-    filename: docker
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: [deb]
+    uris: "https://download.docker.com/linux/ubuntu"
+    suites: "{{ ansible_distribution_release }}"
+    components: [stable]
+    architectures: "{{ ansible_architecture | replace('x86_64', 'amd64') }}"
+    signed_by: /etc/apt/keyrings/docker.asc
     state: present
+    enabled: true
 
 - name: Install Docker Engine and the Compose plugin
   ansible.builtin.apt:
