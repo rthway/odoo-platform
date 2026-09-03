@@ -4,10 +4,12 @@
 # ---------------------------------------------------------------------------
 .env
 .env.*
+# Negate generically, not one file at a time: an explicit list silently drops
+# the next .env.<something>.example somebody adds, and the omission stays
+# invisible until a deployment needs it. tests/test-security.sh asserts that
+# every *.example on disk is genuinely tracked.
 !.env.example
-!.env.dev.example
-!.env.qa.example
-!.env.prod.example
+!.env.*.example
 secrets/
 *.key
 *.pem
