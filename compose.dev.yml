@@ -1,0 +1,43 @@
+# ===========================================================================
+# DEV overlay - 157.10.100.223
+# ===========================================================================
+# Optimised for feedback speed, not for hardening. Deployed automatically on
+# every merge to develop. Nothing here may ever be applied to QA or PROD.
+#   docker compose -f compose.yml -f compose.dev.yml up -d
+# ===========================================================================
+
+services:
+
+  db:
+    # Smaller footprint: DEV shares a modest host and holds no real data.
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+    environment:
+      # Verbose statement logging. Far too noisy for production, exactly what
+      # you want when a developer asks "what query did Odoo actually run?".
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+
+  odoo:
+    # Live-mount addons so a developer can edit a module and restart the
+    # container instead of rebuilding an image. DEV ONLY - in QA and PROD the
+    # addons must come from the immutable image, never from the host disk.
+    volumes:
+      - odoo-filestore:/var/lib/odoo
+      - ./addons:/mnt/extra-addons:ro
+    environment:
+      ODOO_LOG_LEVEL: debug
+      ODOO_WORKERS: 0
+      # The database manager stays available so DEV can be rebuilt at will.
+      ODOO_LIST_DB: "True"
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  proxy:
+    deploy:
+      resources:
+        limits:
+          memory: 256m

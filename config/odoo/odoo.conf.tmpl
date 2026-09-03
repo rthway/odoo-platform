@@ -1,0 +1,64 @@
+; ==========================================================================
+; Odoo configuration template
+; ==========================================================================
+; Rendered by docker/odoo/entrypoint.sh with envsubst at container start.
+; Dollar-brace placeholders are substituted at render time. Nothing here is
+; environment-specific until then, which is what lets one single image
+; serve DEV, QA and PROD unchanged.
+; ==========================================================================
+
+[options]
+
+; --- Database -------------------------------------------------------------
+db_host = ${HOST}
+db_port = ${PORT}
+db_user = ${USER}
+db_password = ${PASSWORD}
+; Restrict the process to exactly one database. Combined with list_db=False
+; this removes the "wrong database" class of incident entirely.
+db_name = ${ODOO_DB_NAME}
+dbfilter = ^${ODOO_DB_NAME}$
+db_maxconn = ${ODOO_DB_MAXCONN}
+db_sslmode = prefer
+
+; --- Security -------------------------------------------------------------
+; Master password. Guards database create/drop/backup endpoints.
+admin_passwd = ${ODOO_ADMIN_PASSWD}
+; list_db=False hides the database manager UI. Enforced non-dev by entrypoint.
+list_db = ${ODOO_LIST_DB}
+; proxy_mode must be True whenever nginx terminates TLS, so Odoo trusts
+; X-Forwarded-Proto and builds https:// URLs instead of http://.
+proxy_mode = ${ODOO_PROXY_MODE}
+
+; --- Addons ---------------------------------------------------------------
+addons_path = /usr/lib/python3/dist-packages/odoo/addons,/mnt/extra-addons
+data_dir = /var/lib/odoo
+
+; --- HTTP -----------------------------------------------------------------
+http_enable = True
+http_interface = 0.0.0.0
+http_port = 8069
+; Longpolling / websocket port, used by the bus for live notifications.
+gevent_port = 8072
+
+; --- Workers and limits ---------------------------------------------------
+; workers = 0 -> threaded mode, development only.
+; workers > 0 -> prefork multiprocessing, required for production.
+workers = ${ODOO_WORKERS}
+max_cron_threads = ${ODOO_MAX_CRON_THREADS}
+; Soft limit: the worker finishes the current request, then recycles.
+; Hard limit: the worker is killed immediately. Soft must stay below hard.
+limit_memory_soft = ${ODOO_LIMIT_MEMORY_SOFT}
+limit_memory_hard = ${ODOO_LIMIT_MEMORY_HARD}
+limit_time_cpu = ${ODOO_LIMIT_TIME_CPU}
+limit_time_real = ${ODOO_LIMIT_TIME_REAL}
+; Requests served before a worker is recycled, bounding any slow memory leak.
+limit_request = ${ODOO_LIMIT_REQUEST}
+
+; --- Logging --------------------------------------------------------------
+; Log to stdout so Docker's json-file driver captures it and promtail ships
+; it to Loki. Never log to a file inside the container.
+logfile = None
+log_level = ${ODOO_LOG_LEVEL}
+log_handler = :INFO
+logrotate = False

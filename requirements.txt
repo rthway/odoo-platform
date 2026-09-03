@@ -1,0 +1,4 @@
+# Extra Python dependencies for custom addons, on top of what the official
+# odoo image already ships. Pin every entry: an unpinned dependency makes the
+# image non-reproducible, which defeats build-once/promote-the-same-image.
+# Empty today because addons/ has no custom modules yet.
