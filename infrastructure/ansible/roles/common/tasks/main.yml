@@ -223,6 +223,24 @@
         logging: "on"
 
 # ---------------------------------------------------------------------------
+# Container port protection
+# ---------------------------------------------------------------------------
+# ufw cannot restrict a Docker-published port: Docker's rules are evaluated
+# first, so `ufw status` can show a source restriction that is not enforced at
+# all. Verified here - the exporters and Loki were reachable from the public
+# internet while ufw claimed they were limited to the monitoring host.
+- name: Install DOCKER-USER rules into ufw's after.rules
+  ansible.builtin.blockinfile:
+    path: /etc/ufw/after.rules
+    marker: "# {mark} ANSIBLE MANAGED - docker container port protection"
+    block: "{{ lookup('ansible.builtin.template', 'docker-user.rules.j2') }}"
+    insertafter: EOF
+    create: false
+  notify: Reload ufw
+  when: not ansible_check_mode
+  tags: [firewall, security]
+
+# ---------------------------------------------------------------------------
 # fail2ban
 # ---------------------------------------------------------------------------
 - name: Configure fail2ban for SSH

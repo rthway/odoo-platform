@@ -1,0 +1,57 @@
+# ===========================================================================
+# DOCKER-USER rules - managed by Ansible (roles/common)
+# ===========================================================================
+# Appended to /etc/ufw/after.rules so the rules survive reboots and ufw
+# reloads.
+#
+# WHY THIS EXISTS
+# ---------------
+# Docker publishes a port by inserting its own iptables rules into the
+# forward path, AHEAD of ufw's INPUT chain. A ufw rule such as
+# "allow 9100 from 192.168.2.56" therefore never sees the packet, and the
+# port is reachable from anywhere that can route to the host - while
+# `ufw status` shows a restriction that reads as if it were enforced.
+#
+# That was not theoretical here. Before these rules, from the public
+# internet:
+#   node_exporter    9100 -> HTTP 200
+#   postgres_exporter 9187 -> HTTP 200   (database internals)
+#   cAdvisor         8081 -> HTTP 200
+#   Loki             3100 -> queryable, returned real log labels
+#
+# DOCKER-USER is the one chain Docker guarantees it will not clobber, and it
+# is evaluated before Docker's own accept rules, so it is where this belongs.
+#
+# SHAPE OF THE POLICY
+# -------------------
+# Deliberately NOT default-deny. A blanket DROP in DOCKER-USER also breaks
+# container egress and inter-container traffic, which is a much larger blast
+# radius than the problem. Instead: drop the sensitive ports when the source
+# is outside the trusted network, and leave everything else alone.
+#
+# Ports 80 and 443 are untouched - they are meant to be public.
+# ===========================================================================
+
+*filter
+:DOCKER-USER - [0:0]
+
+# Established flows first, so replies to traffic the host itself started are
+# never caught by the rules below.
+-A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
+
+# Trusted sources: the private segment every host shares, plus loopback.
+-A DOCKER-USER -s {{ trusted_network }} -j RETURN
+-A DOCKER-USER -s 127.0.0.0/8 -j RETURN
+-A DOCKER-USER -s 172.16.0.0/12 -j RETURN
+
+{% if restricted_container_ports | length > 0 %}
+# Everything else reaching a restricted port is dropped.
+{% for port in restricted_container_ports %}
+-A DOCKER-USER -p tcp --dport {{ port }} -j DROP
+{% endfor %}
+{% endif %}
+
+# Anything not matched above continues through Docker's normal chain.
+-A DOCKER-USER -j RETURN
+
+COMMIT

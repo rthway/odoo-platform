@@ -24,3 +24,21 @@ app_host_ips:
   - 192.168.2.6      # dev
   - 192.168.2.52     # qa
   - 192.168.2.217    # prod
+
+# --- Container port protection (DOCKER-USER) --------------------------------
+# The private segment all four hosts share. Traffic from here is trusted.
+trusted_network: 192.168.2.0/24
+
+# Ports published by containers that must NOT be reachable from outside
+# trusted_network. ufw alone cannot enforce this - Docker's rules run first -
+# so these are dropped in the DOCKER-USER chain instead.
+#
+# 80 and 443 are deliberately absent: they are meant to be public.
+restricted_container_ports:
+  - 9100    # node_exporter
+  - 9187    # postgres_exporter - exposes database internals
+  - 8081    # cAdvisor
+  - 3100    # Loki - auth_enabled is false, so this is fully open if reachable
+  - 9090    # Prometheus
+  - 9093    # Alertmanager
+  - 3000    # Grafana direct, bypassing the nginx front end
