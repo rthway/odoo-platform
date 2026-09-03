@@ -29,16 +29,25 @@ app_host_ips:
 # The private segment all four hosts share. Traffic from here is trusted.
 trusted_network: 192.168.2.0/24
 
-# Ports published by containers that must NOT be reachable from outside
-# trusted_network. ufw alone cannot enforce this - Docker's rules run first -
-# so these are dropped in the DOCKER-USER chain instead.
+# Ports that must NOT be reachable from outside trusted_network. ufw alone
+# cannot enforce this - Docker's rules run first - so these are dropped in the
+# DOCKER-USER chain instead.
+#
+# THESE ARE CONTAINER PORTS, NOT PUBLISHED PORTS.
+# DNAT happens before the FORWARD chain, so by the time DOCKER-USER sees the
+# packet the destination port is the one INSIDE the container. cAdvisor is
+# published as 8081:8080, and a rule matching 8081 silently does nothing -
+# which is exactly how it stayed reachable after the first attempt at this,
+# while node_exporter and postgres_exporter (whose published and container
+# ports happen to match) were correctly blocked.
 #
 # 80 and 443 are deliberately absent: they are meant to be public.
 restricted_container_ports:
-  - 9100    # node_exporter
-  - 9187    # postgres_exporter - exposes database internals
-  - 8081    # cAdvisor
-  - 3100    # Loki - auth_enabled is false, so this is fully open if reachable
-  - 9090    # Prometheus
-  - 9093    # Alertmanager
+  - 9100    # node_exporter          (published 9100)
+  - 9187    # postgres_exporter      (published 9187) - database internals
+  - 8080    # cAdvisor               (published 8081) - container port
+  - 8081    # kept as well, harmless, in case a future mapping is 1:1
+  - 3100    # Loki - auth_enabled is false, so open to anyone who reaches it
+  - 9090    # Prometheus             - no authentication
+  - 9093    # Alertmanager           - no authentication, can silence alerts
   - 3000    # Grafana direct, bypassing the nginx front end
