@@ -191,8 +191,15 @@
         # exists on the target.
         src: ../../monitoring/alertmanager/alertmanager.yml.j2
         dest: "{{ app_dir }}/monitoring/alertmanager/alertmanager.generated.yml"
-        owner: "{{ deploy_user }}"
-        group: "{{ deploy_user }}"
+        # Owned by the UID the container runs as (65534, nobody), not by the
+        # deploy user. compose.observability.yml pins alertmanager to
+        # 65534:65534, so a file owned by devops at 0640 is unreadable to it
+        # and it crash-loops on "permission denied".
+        #
+        # 0640 rather than 0644 because this file holds real webhook URLs and
+        # mail settings: readable by the service, by nobody else.
+        owner: "65534"
+        group: "65534"
         mode: "0640"
       # Deliberately NOT no_log. The rendered file holds secrets, but the
       # module's own error messages are paths and syntax - and a censored
