@@ -30,6 +30,11 @@
       - gnupg
       # Required by ansible.builtin.deb822_repository in roles/docker.
       - python3-debian
+      # NOT installed by default on the Ubuntu 24.04 images these hosts use.
+      # Without it `crontab` does not exist, and every scheduled job - the
+      # nightly backup, the weekly restore verification, retention pruning,
+      # the Docker image prune - silently has nowhere to be installed.
+      - cron
       - age             # backup encryption
       - postgresql-client
       - jq

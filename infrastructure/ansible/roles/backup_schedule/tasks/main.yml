@@ -29,6 +29,9 @@
       ./scripts/backup.sh -e {{ env_name }} -l daily
       >> {{ backup_dir }}/backup.log 2>&1
     state: present
+  # crontab comes from the `cron` package roles/common installs; check mode
+  # has not installed it.
+  when: not ansible_check_mode
 
 # ---------------------------------------------------------------------------
 # Weekly verification - a real restore into a throwaway container
@@ -48,6 +51,9 @@
       -s "$(ls -1d {{ backup_dir }}/{{ env_name }}/*/ | tail -1)" --restore
       >> {{ backup_dir }}/verify.log 2>&1
     state: present
+  # crontab comes from the `cron` package roles/common installs; check mode
+  # has not installed it.
+  when: not ansible_check_mode
 
 # ---------------------------------------------------------------------------
 # Pruning
@@ -65,6 +71,9 @@
       ./scripts/prune-backups.sh -e {{ env_name }} --apply
       >> {{ backup_dir }}/prune.log 2>&1
     state: present
+  # crontab comes from the `cron` package roles/common installs; check mode
+  # has not installed it.
+  when: not ansible_check_mode
 
 # ---------------------------------------------------------------------------
 - name: Rotate the backup logs
