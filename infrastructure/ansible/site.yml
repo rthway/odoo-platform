@@ -130,6 +130,13 @@
   tags: [observability]
 
   tasks:
+    # The deploy user gained the `docker` group in the previous play, but
+    # ControlPersist keeps the SSH session alive with the OLD membership, so
+    # the compose task below fails with "permission denied ...
+    # /var/run/docker.sock". Same first-run-only trap as the verification play.
+    - name: Reset the connection so new group membership takes effect
+      ansible.builtin.meta: reset_connection
+
     - name: Clone or update the repository on OPS
       become: true
       become_user: "{{ deploy_user }}"
