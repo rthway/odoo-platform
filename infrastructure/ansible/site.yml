@@ -72,6 +72,64 @@
         quiet: true
       when: "'ops' in group_names"
 
+    # Alertmanager treats a receiver with no integrations as valid config and
+    # then silently discards every alert routed to it. That is exactly how
+    # this fleet ran: all six receivers rendered empty, so Prometheus
+    # correctly detected a production outage and Alertmanager threw the
+    # notification away. Nothing anywhere reports this - the only trace is
+    # alertmanager_notifications_total sitting at 0 for every integration,
+    # which is indistinguishable from "nothing has gone wrong yet".
+    #
+    # Each receiver in monitoring/alertmanager/alertmanager.yml.j2 wraps its
+    # integrations in a conditional on alert_email_to or on
+    # alert_slack_webhook_url, so supplying neither is what leaves them empty.
+    - name: Require somewhere for alerts to go
+      ansible.builtin.assert:
+        that:
+          - (alert_email_to | default('') | length > 0) or
+            (alert_slack_webhook_url | default('') | length > 0)
+        fail_msg: >-
+          Neither alert_email_to nor alert_slack_webhook_url is set, so every
+          receiver in Alertmanager would render with no integrations and every
+          alert would be discarded without a trace. Supply at least one.
+          If a fleet with no alert delivery is genuinely intended, set
+          alerts_allow_no_receiver=true to say so deliberately - and then this
+          play warns about it on every run instead.
+        quiet: true
+      when:
+        - "'ops' in group_names"
+        - not (alerts_allow_no_receiver | default(false) | bool)
+
+    # Email needs the smarthost as well: a receiver with email_configs but no
+    # global smtp_smarthost fails at send time. That failure is at least
+    # visible in alertmanager_notifications_failed_total, unlike the silent
+    # case above, but there is no reason to ship it.
+    - name: Require an SMTP smarthost when alerts go to email
+      ansible.builtin.assert:
+        that:
+          - smtp_smarthost | default('') | length > 0
+        fail_msg: >-
+          alert_email_to is set but smtp_smarthost is not, so Alertmanager has
+          no way to send the mail and every email notification will fail.
+        quiet: true
+      when:
+        - "'ops' in group_names"
+        - alert_email_to | default('') | length > 0
+
+    - name: Warn that alerts are configured to go nowhere
+      ansible.builtin.debug:
+        msg: >-
+          *** {{ inventory_hostname }} has NO alert destination. Every
+          Alertmanager receiver will render empty and every alert - including
+          a production outage - will be discarded silently. This is only
+          happening because alerts_allow_no_receiver is set. Unset it and
+          supply alert_email_to or alert_slack_webhook_url. ***
+      when:
+        - "'ops' in group_names"
+        - alerts_allow_no_receiver | default(false) | bool
+        - not (alert_email_to | default('') | length > 0)
+        - not (alert_slack_webhook_url | default('') | length > 0)
+
     # Sudo is needed by every role that follows. Checking it here turns a
     # confusing mid-play permission error into one clear message.
     - name: Confirm privilege escalation works

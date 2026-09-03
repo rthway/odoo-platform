@@ -135,6 +135,14 @@ jobs:
           GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          # Where alerts go. Without these the Alertmanager receivers render
+          # with no integrations and every alert is discarded in silence, so
+          # they are as load-bearing as the Grafana credentials above.
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          ALERT_EMAIL_CRITICAL: ${{ secrets.ALERT_EMAIL_CRITICAL }}
+          ALERT_SLACK_WEBHOOK_URL: ${{ secrets.ALERT_SLACK_WEBHOOK_URL }}
+          SMTP_SMARTHOST: ${{ secrets.SMTP_SMARTHOST }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
           APPLY: ${{ inputs.apply }}
           TAGS: ${{ inputs.tags }}
         run: |
@@ -161,6 +169,11 @@ jobs:
             -e "grafana_admin_password=${GRAFANA_ADMIN_PASSWORD}" \
             -e "dockerhub_username=${DOCKERHUB_USERNAME}" \
             -e "dockerhub_token=${DOCKERHUB_TOKEN}" \
+            -e "alert_email_to=${ALERT_EMAIL_TO}" \
+            -e "alert_email_critical=${ALERT_EMAIL_CRITICAL}" \
+            -e "alert_slack_webhook_url=${ALERT_SLACK_WEBHOOK_URL}" \
+            -e "smtp_smarthost=${SMTP_SMARTHOST}" \
+            -e "smtp_from=${SMTP_FROM}" \
             "${MODE[@]}" "${EXTRA[@]+"${EXTRA[@]}"}"
 
       - name: Summary
