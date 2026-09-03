@@ -135,3 +135,5 @@
     # the previous release image that rollback.sh depends on.
     job: "/usr/bin/docker image prune -af --filter 'until=168h' >/dev/null 2>&1"
     user: root
+  # Needs crontab, installed by roles/common in this same play.
+  when: not ansible_check_mode
