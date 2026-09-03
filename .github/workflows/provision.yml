@@ -67,11 +67,24 @@ jobs:
           # Galaxy returns 5xx often enough that a single attempt makes
           # provisioning flaky for reasons that have nothing to do with the
           # change being deployed. Retry with a short backoff.
+          #
+          # Attempts after the first clear the response cache too. Retrying
+          # alone was not enough: a corrupted cache ("Missing expected
+          # 'results' in ansible-galaxy cache") persists for the whole run,
+          # so every remaining attempt would hit the same bad entry.
           for attempt in 1 2 3 4 5; do
-            if ansible-galaxy collection install -r infrastructure/ansible/requirements.yml; then
+            extra=""
+            if [ "$attempt" -gt 1 ]; then
+              extra="--clear-response-cache"
+            fi
+
+            # shellcheck disable=SC2086
+            if ansible-galaxy collection install $extra \
+                 -r infrastructure/ansible/requirements.yml; then
               echo "collections installed on attempt $attempt"
               exit 0
             fi
+
             echo "::warning::galaxy install attempt $attempt failed, retrying"
             sleep $(( attempt * 10 ))
           done

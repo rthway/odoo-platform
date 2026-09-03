@@ -166,8 +166,38 @@ jobs:
 
       - name: Install Ansible and its collections
         run: |
+          set -euo pipefail
           pip install --quiet ansible-core ansible-lint
-          ansible-galaxy collection install -r infrastructure/ansible/requirements.yml
+
+          # This job feeds the required "CI passed" gate, so a flaky Galaxy
+          # install fails pull requests for reasons that have nothing to do
+          # with the change under review. Retry, exactly as provision.yml
+          # does.
+          #
+          # Attempts after the first also clear the response cache. Both
+          # failures seen on 2026-09-03 needed it: one was a plain 5xx, but
+          # the other was "Missing expected 'results' in ansible-galaxy
+          # cache", and a poisoned cache defeats every later attempt in the
+          # same run - so a bare retry would have burned all five.
+          for attempt in 1 2 3 4 5; do
+            extra=""
+            if [ "$attempt" -gt 1 ]; then
+              extra="--clear-response-cache"
+            fi
+
+            # shellcheck disable=SC2086
+            if ansible-galaxy collection install $extra \
+                 -r infrastructure/ansible/requirements.yml; then
+              echo "collections installed on attempt $attempt"
+              exit 0
+            fi
+
+            echo "::warning::galaxy install attempt $attempt failed, retrying"
+            sleep $(( attempt * 10 ))
+          done
+
+          echo "::error::could not install Ansible collections after 5 attempts"
+          exit 1
 
       - name: Syntax check
         working-directory: infrastructure/ansible
