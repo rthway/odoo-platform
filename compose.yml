@@ -37,11 +37,15 @@ services:
     command:
       - postgres
       - -c
-      - config_file=/etc/postgresql/postgresql.conf
+      - config_file=/etc/postgresql/conf/postgresql.conf
     volumes:
       - db-data:/var/lib/postgresql/data
       - wal-archive:/var/lib/postgresql/wal_archive
-      - ./config/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      # Directories, not files. A bind mount of a FILE binds an inode, and
+      # `git pull` replaces files rather than editing them - so the container
+      # would keep serving the old config and a reload would appear to do
+      # nothing. Mounting the directory makes replacements visible.
+      - ./config/postgres:/etc/postgresql/conf:ro
       - ./config/postgres/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       # -U/-d must match the real role and database, otherwise pg_isready
@@ -103,6 +107,9 @@ services:
     restart: unless-stopped
     depends_on:
       - odoo
+    # -c because the config is mounted as a directory rather than over
+    # /etc/nginx/nginx.conf; see the postgres volumes above for why.
+    command: ["nginx", "-c", "/etc/nginx/app/nginx.conf", "-g", "daemon off;"]
     ports:
       # Bound to BIND_ADDRESS, 127.0.0.1 by default, so a stack cannot be
       # published to the internet by accident. Overlays widen it explicitly.
@@ -118,7 +125,7 @@ services:
       # $proxy_add_x_forwarded_for and silently breaking proxying and TLS.
       NGINX_ENVSUBST_FILTER: "^(ODOO_DOMAIN|HTTPS_PUBLIC_PORT)$$"
     volumes:
-      - ./config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/nginx:/etc/nginx/app:ro
       - ./config/nginx/snippets:/etc/nginx/snippets:ro
       # *.template in this directory is rendered into /etc/nginx/conf.d/.
       - ./config/nginx/conf.d:/etc/nginx/templates:ro

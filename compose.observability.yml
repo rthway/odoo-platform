@@ -11,6 +11,13 @@
 #
 # Exporters (node_exporter, cAdvisor) run on DEV, QA and PROD; this file
 # defines the central collectors that scrape them.
+#
+# CONFIGS ARE MOUNTED AS DIRECTORIES, NOT SINGLE FILES.
+# A bind mount of a file binds an INODE. `git pull` and `git reset --hard`
+# replace files rather than editing them in place, so the container keeps
+# serving the old content and a config reload appears to do nothing at all -
+# which is exactly what happened here after moving the hosts to 80/443.
+# Mounting the containing directory makes replacements visible.
 # ===========================================================================
 
 name: odoo-observability
@@ -29,7 +36,7 @@ services:
     restart: always
     user: "65534:65534"
     command:
-      - --config.file=/etc/prometheus/prometheus.yml
+      - --config.file=/etc/prometheus/conf/prometheus.yml
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}
       - --web.enable-lifecycle
@@ -37,7 +44,7 @@ services:
       # is no reason for a dashboard to be able to erase history.
       - --web.external-url=${PROMETHEUS_EXTERNAL_URL:-http://localhost:9090}
     volumes:
-      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus:/etc/prometheus/conf:ro
       - ./monitoring/alerts:/etc/prometheus/alerts:ro
       - prometheus-data:/prometheus
     ports:
@@ -59,14 +66,15 @@ services:
     restart: always
     user: "65534:65534"
     command:
-      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --config.file=/etc/alertmanager/conf/alertmanager.generated.yml
       - --storage.path=/alertmanager
       - --web.external-url=${ALERTMANAGER_EXTERNAL_URL:-http://localhost:9093}
     volumes:
       # The GENERATED file, rendered by Ansible from alertmanager.yml.j2.
       # Alertmanager does not expand environment variables, so the config it
-      # reads must already have real values in it.
-      - ./monitoring/alertmanager/alertmanager.generated.yml:/etc/alertmanager/alertmanager.yml:ro
+      # reads must already have real values in it. Mounted as a directory,
+      # see the note at the top of this file.
+      - ./monitoring/alertmanager:/etc/alertmanager/conf:ro
       - alertmanager-data:/alertmanager
     ports:
       - "${MONITORING_BIND:-127.0.0.1}:${ALERTMANAGER_PORT:-9093}:9093"
@@ -78,9 +86,9 @@ services:
     image: grafana/loki:${LOKI_VERSION:-3.3.2}
     restart: always
     user: "10001:10001"
-    command: -config.file=/etc/loki/loki-config.yml
+    command: -config.file=/etc/loki/conf/loki-config.yml
     volumes:
-      - ./monitoring/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - ./monitoring/loki:/etc/loki/conf:ro
       - loki-data:/loki
     ports:
       # Loki is the ONE service here that is not purely human-facing: promtail
@@ -143,9 +151,9 @@ services:
     image: prom/blackbox-exporter:${BLACKBOX_VERSION:-v0.26.0}
     restart: always
     command:
-      - --config.file=/etc/blackbox/blackbox.yml
+      - --config.file=/etc/blackbox/conf/blackbox.yml
     volumes:
-      - ./monitoring/blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+      - ./monitoring/blackbox:/etc/blackbox/conf:ro
     networks: [observability]
     logging: *default-logging
 
@@ -199,6 +207,9 @@ services:
     image: nginx:${NGINX_VERSION:-1.31.4-alpine3.24}
     restart: always
     depends_on: [grafana]
+    # -c because the config is mounted as a directory, not over
+    # /etc/nginx/nginx.conf. See the note at the top of this file.
+    command: ["nginx", "-c", "/etc/nginx/ops/nginx.conf", "-g", "daemon off;"]
     ports:
       - "${OPS_BIND:-0.0.0.0}:${OPS_HTTP_PORT:-80}:80"
       - "${OPS_BIND:-0.0.0.0}:${OPS_HTTPS_PORT:-443}:443"
@@ -209,7 +220,7 @@ services:
       # $$host and $$proxy_add_x_forwarded_for.
       NGINX_ENVSUBST_FILTER: "^GRAFANA_DOMAIN$$"
     volumes:
-      - ./config/nginx/ops/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/nginx/ops:/etc/nginx/ops:ro
       - ./config/nginx/snippets:/etc/nginx/snippets:ro
       - ./config/nginx/ops/conf.d:/etc/nginx/templates:ro
       - ./config/nginx/tls:/etc/nginx/tls:ro
