@@ -61,10 +61,37 @@ if keys="$(git ls-files | grep -E '\.(pem|key|p12|pfx)$|id_rsa|id_ed25519' || tr
     fi
 fi
 
-if grep -rlE 'BEGIN (RSA |OPENSSH |EC |DSA )?PRIVATE KEY' --exclude-dir=.git . >/dev/null 2>&1; then
-    fail "a PEM private key block is present in the working tree"
+# Scan TRACKED files only. What matters is what can reach the repository; a
+# locally generated self-signed key for development is legitimate and lives
+# in the working tree by design. Scanning the tree instead made this fail the
+# moment scripts/gen-local-tls.sh was run.
+pem_tracked=""
+while IFS= read -r f; do
+    [[ -f "${f}" ]] || continue
+    if grep -qE 'BEGIN (RSA |OPENSSH |EC |DSA )?PRIVATE KEY' "${f}" 2>/dev/null; then
+        pem_tracked="${pem_tracked} ${f}"
+    fi
+done < <(git ls-files)
+
+if [[ -n "${pem_tracked}" ]]; then
+    fail "a PEM private key is COMMITTED:${pem_tracked}"
 else
-    pass "no PEM private key blocks in the tree"
+    pass "no PEM private key is tracked by git"
+fi
+
+# Any key material sitting in the working tree must at least be ignored, so
+# it cannot be swept up by `git add -A`.
+unignored_keys=""
+while IFS= read -r f; do
+    git check-ignore -q "${f}" || git ls-files --error-unmatch "${f}" >/dev/null 2>&1 \
+        || unignored_keys="${unignored_keys} ${f}"
+done < <(find . -type f \( -name '*.pem' -o -name '*.key' -o -name 'id_rsa*' -o -name 'id_ed25519*' \) \
+              -not -path './.git/*' 2>/dev/null)
+
+if [[ -n "${unignored_keys}" ]]; then
+    fail "untracked key material is NOT gitignored:${unignored_keys}"
+else
+    pass "any local key material is gitignored"
 fi
 
 # ---------------------------------------------------------------------------
