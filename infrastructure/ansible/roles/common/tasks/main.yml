@@ -1,0 +1,296 @@
+---
+# ===========================================================================
+# common - baseline hardening for every server
+# ===========================================================================
+# Applied to DEV, QA, PROD and OPS alike. A DEV box on the same network as
+# production is a route into production, so it gets the same baseline.
+#
+# NOTE ON FIREWALL SAFETY: the SSH rule is added BEFORE the default-deny
+# policy is set. Reversing that order locks everyone out of a remote server
+# with no console, which is unrecoverable without provider intervention.
+# ===========================================================================
+
+- name: Gather package facts
+  ansible.builtin.package_facts:
+    manager: auto
+  tags: [always]
+
+# ---------------------------------------------------------------------------
+# Packages
+# ---------------------------------------------------------------------------
+- name: Install baseline packages
+  ansible.builtin.apt:
+    name:
+      - ufw
+      - fail2ban
+      - unattended-upgrades
+      - chrony          # clock skew breaks TLS, backups and log correlation
+      - curl
+      - ca-certificates
+      - gnupg
+      - age             # backup encryption
+      - postgresql-client
+      - jq
+      - htop
+      - ncdu
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  tags: [packages]
+
+# ---------------------------------------------------------------------------
+# Automatic security updates
+# ---------------------------------------------------------------------------
+- name: Enable unattended security upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    mode: "0644"
+    owner: root
+    group: root
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      APT::Periodic::AutocleanInterval "7";
+  tags: [security]
+
+- name: Restrict unattended upgrades to the security pocket
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/50unattended-upgrades-local
+    mode: "0644"
+    owner: root
+    group: root
+    content: |
+      // Security updates only. Feature updates applied unattended have
+      // broken production before; those go through a change window.
+      Unattended-Upgrade::Allowed-Origins {
+          "${distro_id}:${distro_codename}-security";
+          "${distro_id}ESMApps:${distro_codename}-apps-security";
+          "${distro_id}ESM:${distro_codename}-infra-security";
+      };
+      Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+      Unattended-Upgrade::Remove-Unused-Dependencies "true";
+      // Never reboot on its own. A production database deciding to reboot
+      // at 06:00 is an outage nobody scheduled.
+      Unattended-Upgrade::Automatic-Reboot "false";
+  tags: [security]
+
+# ---------------------------------------------------------------------------
+# Time synchronisation
+# ---------------------------------------------------------------------------
+- name: Ensure chrony is running
+  ansible.builtin.service:
+    name: chrony
+    state: started
+    enabled: true
+  tags: [time]
+
+# ---------------------------------------------------------------------------
+# SSH hardening
+# ---------------------------------------------------------------------------
+- name: Harden the SSH daemon
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/99-hardening.conf
+    mode: "0644"
+    owner: root
+    group: root
+    content: |
+      # Managed by Ansible (roles/common). Local edits are overwritten.
+
+      # Keys only. Password authentication is what brute-force attacks target.
+      PasswordAuthentication no
+      PermitEmptyPasswords no
+      ChallengeResponseAuthentication no
+      KbdInteractiveAuthentication no
+      PubkeyAuthentication yes
+
+      # No direct root login: administrative actions must be attributable to
+      # a person through sudo.
+      PermitRootLogin {{ common_permit_root_login }}
+
+      MaxAuthTries 3
+      MaxSessions 10
+      LoginGraceTime 30
+
+      # No forwarding by default; these turn a shell into a network pivot.
+      X11Forwarding no
+      AllowAgentForwarding no
+      AllowTcpForwarding {{ 'yes' if common_allow_tcp_forwarding else 'no' }}
+
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+
+      Protocol 2
+      LogLevel VERBOSE
+  notify: Restart sshd
+  tags: [ssh]
+
+# The one change that can lock us out permanently, so it is validated first.
+- name: Validate the SSH configuration before restarting
+  ansible.builtin.command: sshd -t
+  changed_when: false
+  tags: [ssh]
+
+# ---------------------------------------------------------------------------
+# Firewall - order matters, see the header
+# ---------------------------------------------------------------------------
+- name: Allow SSH before anything else
+  community.general.ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+    comment: "SSH - added before default deny to avoid lockout"
+  tags: [firewall]
+
+- name: Allow outbound traffic
+  community.general.ufw:
+    direction: outgoing
+    policy: allow
+  tags: [firewall]
+
+- name: Allow HTTP and HTTPS on application servers
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+    comment: "Odoo ingress"
+  loop: ["80", "443"]
+  when: "'app' in group_names"
+  tags: [firewall]
+
+# Exporters are scraped only by the OPS server. Opening them to the world
+# would publish detailed internal metrics to anyone who asks.
+- name: Allow the monitoring server to scrape exporters
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+    src: "{{ monitoring_server_ip }}"
+    comment: "Prometheus scrape from OPS only"
+  loop: ["9100", "9187", "8081"]
+  when: "'app' in group_names"
+  tags: [firewall]
+
+- name: Deny all other inbound traffic
+  community.general.ufw:
+    direction: incoming
+    policy: deny
+  tags: [firewall]
+
+- name: Enable the firewall
+  community.general.ufw:
+    state: enabled
+    logging: "on"
+  tags: [firewall]
+
+# ---------------------------------------------------------------------------
+# fail2ban
+# ---------------------------------------------------------------------------
+- name: Configure fail2ban for SSH
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/jail.d/sshd.local
+    mode: "0644"
+    owner: root
+    group: root
+    content: |
+      [sshd]
+      enabled = true
+      port = 22
+      maxretry = 5
+      findtime = 600
+      bantime = 3600
+      # Repeat offenders are banned for a week rather than an hour.
+      bantime.increment = true
+      bantime.factor = 24
+      bantime.maxtime = 604800
+  notify: Restart fail2ban
+  tags: [security]
+
+- name: Ensure fail2ban is running
+  ansible.builtin.service:
+    name: fail2ban
+    state: started
+    enabled: true
+  tags: [security]
+
+# ---------------------------------------------------------------------------
+# Kernel parameters
+# ---------------------------------------------------------------------------
+- name: Apply sysctl hardening and database tuning
+  ansible.posix.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    sysctl_set: true
+    reload: true
+  loop:
+    # --- Network hardening ---
+    - {name: net.ipv4.conf.all.accept_redirects, value: "0"}
+    - {name: net.ipv4.conf.all.send_redirects, value: "0"}
+    - {name: net.ipv4.conf.all.accept_source_route, value: "0"}
+    - {name: net.ipv4.tcp_syncookies, value: "1"}
+    - {name: net.ipv4.conf.all.rp_filter, value: "1"}
+    # --- PostgreSQL ---
+    # overcommit_memory=2 stops the OOM killer choosing the postgres
+    # postmaster, which would take the whole database down rather than one
+    # backend. Deliberately not applied to OPS.
+    - {name: vm.overcommit_memory, value: "2"}
+    - {name: vm.overcommit_ratio, value: "80"}
+    # Small dirty ratios keep checkpoint write storms from stalling queries.
+    - {name: vm.dirty_ratio, value: "10"}
+    - {name: vm.dirty_background_ratio, value: "5"}
+    # Odoo is latency-sensitive; swapping a worker is worse than reclaiming.
+    - {name: vm.swappiness, value: "10"}
+  when: "'app' in group_names or item.name.startswith('net.')"
+  tags: [sysctl]
+
+# ---------------------------------------------------------------------------
+# Directories
+# ---------------------------------------------------------------------------
+- name: Create the application directory
+  ansible.builtin.file:
+    path: "{{ app_dir }}"
+    state: directory
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_user }}"
+    mode: "0750"
+  tags: [dirs]
+
+- name: Create the backup directory
+  ansible.builtin.file:
+    path: "{{ backup_dir }}"
+    state: directory
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_user }}"
+    # 0700: backups contain every record in the business.
+    mode: "0700"
+  tags: [dirs, backup]
+
+- name: Create the node_exporter textfile collector directory
+  ansible.builtin.file:
+    path: /var/lib/node_exporter/textfile_collector
+    state: directory
+    owner: "{{ deploy_user }}"
+    group: "{{ deploy_user }}"
+    mode: "0755"
+  tags: [dirs, monitoring]
+
+# ---------------------------------------------------------------------------
+# Log rotation for anything written outside Docker
+# ---------------------------------------------------------------------------
+- name: Rotate deployment logs
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/odoo-platform
+    mode: "0644"
+    owner: root
+    group: root
+    content: |
+      {{ app_dir }}/.deploy-state/*.log {
+          weekly
+          rotate 12
+          compress
+          delaycompress
+          missingok
+          notifempty
+          copytruncate
+      }
+  tags: [logs]

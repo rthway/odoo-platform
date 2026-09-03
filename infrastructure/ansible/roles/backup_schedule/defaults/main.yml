@@ -1,0 +1,8 @@
+---
+backup_hour: "2"
+backup_minute: "15"
+# Verification restores are expensive; weekly is the compromise between cost
+# and knowing the backups actually work.
+verify_weekday: "0"
+verify_hour: "4"
+prune_hour: "5"

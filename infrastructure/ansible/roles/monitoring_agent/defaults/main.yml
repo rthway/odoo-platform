@@ -1,0 +1,5 @@
+---
+monitoring_server_ip: 157.10.100.232
+node_exporter_version: v1.8.2
+cadvisor_version: v0.52.1
+postgres_exporter_version: v0.16.0

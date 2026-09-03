@@ -1,0 +1,117 @@
+---
+# ===========================================================================
+# monitoring_agent - exporters on DEV, QA and PROD
+# ===========================================================================
+# Run as containers rather than packages so their versions are pinned the
+# same way everything else is, and so an upgrade is a tag change.
+#
+# All three bind to 127.0.0.1 only... except that Prometheus lives on another
+# host, so they must listen on the LAN interface. The firewall rule in the
+# `common` role restricts them to the OPS server's address, which is what
+# actually protects them.
+# ===========================================================================
+
+- name: Create the promtail configuration directory
+  ansible.builtin.file:
+    path: /etc/promtail
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the promtail configuration
+  ansible.builtin.copy:
+    src: "{{ app_dir }}/monitoring/promtail/promtail-config.yml"
+    dest: /etc/promtail/promtail-config.yml
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart promtail
+
+- name: Run the exporters
+  community.docker.docker_container:
+    name: "{{ item.name }}"
+    image: "{{ item.image }}"
+    state: started
+    restart_policy: always
+    command: "{{ item.command | default(omit) }}"
+    published_ports: "{{ item.ports }}"
+    volumes: "{{ item.volumes | default(omit) }}"
+    env: "{{ item.env | default(omit) }}"
+    privileged: "{{ item.privileged | default(false) }}"
+    pid_mode: "{{ item.pid_mode | default(omit) }}"
+    devices: "{{ item.devices | default(omit) }}"
+    log_driver: json-file
+    log_options:
+      max-size: "10m"
+      max-file: "3"
+  loop:
+    # --- Host metrics -------------------------------------------------
+    - name: node-exporter
+      image: "prom/node-exporter:{{ node_exporter_version }}"
+      ports: ["9100:9100"]
+      command:
+        - --path.rootfs=/host
+        - --path.procfs=/host/proc
+        - --path.sysfs=/host/sys
+        # Where scripts/backup.sh writes backup freshness metrics.
+        - --collector.textfile.directory=/var/lib/node_exporter/textfile_collector
+      volumes:
+        - "/:/host:ro,rslave"
+        - "/var/lib/node_exporter/textfile_collector:/var/lib/node_exporter/textfile_collector:ro"
+      pid_mode: host
+
+    # --- Container metrics --------------------------------------------
+    - name: cadvisor
+      image: "gcr.io/cadvisor/cadvisor:{{ cadvisor_version }}"
+      # 8081 on the host: 8080 is commonly taken by an application.
+      ports: ["8081:8080"]
+      privileged: true
+      devices: ["/dev/kmsg"]
+      volumes:
+        - "/:/rootfs:ro"
+        - "/var/run:/var/run:ro"
+        - "/sys:/sys:ro"
+        - "/var/lib/docker/:/var/lib/docker:ro"
+        - "/dev/disk/:/dev/disk:ro"
+
+    # --- PostgreSQL metrics -------------------------------------------
+    - name: postgres-exporter
+      image: "quay.io/prometheuscommunity/postgres-exporter:{{ postgres_exporter_version }}"
+      ports: ["9187:9187"]
+      env:
+        # Connects over the compose backend network by container name.
+        DATA_SOURCE_NAME: "postgresql://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_host }}:5432/{{ postgres_db }}?sslmode=disable"
+        PG_EXPORTER_AUTO_DISCOVER_DATABASES: "false"
+  no_log: "{{ item.name == 'postgres-exporter' }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Connect postgres-exporter to the application backend network
+  community.docker.docker_network:
+    name: "odoo-{{ env_name }}_backend"
+    connected:
+      - postgres-exporter
+    appends: true
+  # The network only exists once the application stack has been created.
+  failed_when: false
+
+- name: Run promtail
+  community.docker.docker_container:
+    name: promtail
+    image: "grafana/promtail:{{ loki_version | default('3.3.2') }}"
+    state: started
+    restart_policy: always
+    command: -config.file=/etc/promtail/promtail-config.yml -config.expand-env=true
+    env:
+      HOSTNAME: "{{ inventory_hostname }}"
+      ENVIRONMENT: "{{ env_name }}"
+    volumes:
+      - "/etc/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro"
+      - "/var/log:/var/log:ro"
+      - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
+      # Docker service discovery needs the socket. Read-only, but note this
+      # is still a powerful grant - recorded in docs/security.md.
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "promtail-positions:/var/lib/promtail"

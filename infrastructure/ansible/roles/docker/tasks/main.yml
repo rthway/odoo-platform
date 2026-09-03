@@ -1,0 +1,101 @@
+---
+# ===========================================================================
+# docker - install the engine from Docker's own repository
+# ===========================================================================
+# Distribution packages lag badly and often ship without the compose v2
+# plugin, which every script here depends on.
+# ===========================================================================
+
+- name: Install prerequisites
+  ansible.builtin.apt:
+    name: [ca-certificates, curl, gnupg]
+    state: present
+    update_cache: true
+
+- name: Create the keyring directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Add Docker's GPG key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+
+- name: Add the Docker repository
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [arch={{ ansible_architecture | replace('x86_64', 'amd64') }}
+      signed-by=/etc/apt/keyrings/docker.asc]
+      https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+    filename: docker
+    state: present
+
+- name: Install Docker Engine and the Compose plugin
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+
+- name: Configure the Docker daemon
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    mode: "0644"
+    owner: root
+    group: root
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": {
+          "max-size": "{{ docker_log_max_size }}",
+          "max-file": "{{ docker_log_max_file }}"
+        },
+        "live-restore": {{ docker_live_restore | lower }},
+        "userland-proxy": false,
+        "no-new-privileges": true,
+        "default-ulimits": {
+          "nofile": {"Name": "nofile", "Hard": 65535, "Soft": 65535}
+        }
+      }
+  notify: Restart docker
+
+# live-restore keeps containers running across a daemon restart, so a Docker
+# upgrade does not have to be an Odoo outage.
+- name: Ensure Docker is running and enabled
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Add the deployment user to the docker group
+  ansible.builtin.user:
+    name: "{{ item }}"
+    groups: docker
+    append: true
+  loop: "{{ docker_users }}"
+
+# Docker socket access is root-equivalent. Recorded here so the security
+# documentation and reality do not drift apart.
+- name: Note that docker group membership is root-equivalent
+  ansible.builtin.debug:
+    msg: >-
+      {{ item }} is in the docker group, which is equivalent to root on this
+      host. This is accepted deliberately so deployments need no sudo; see
+      docs/security.md.
+  loop: "{{ docker_users }}"
+
+- name: Prune unused images weekly
+  ansible.builtin.cron:
+    name: docker-prune
+    special_time: weekly
+    # Images only, and only those older than a week: this must never remove
+    # the previous release image that rollback.sh depends on.
+    job: "/usr/bin/docker image prune -af --filter 'until=168h' >/dev/null 2>&1"
+    user: root

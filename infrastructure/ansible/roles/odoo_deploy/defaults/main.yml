@@ -1,0 +1,11 @@
+---
+app_repo_url: https://github.com/rthway/odoo-platform.git
+app_repo_version: main
+app_dir: /opt/odoo-platform
+deploy_user: deploy
+odoo_domain: localhost
+
+# Deliberately no defaults for POSTGRES_PASSWORD or ODOO_ADMIN_PASSWD. A
+# default password is a password everyone has; these must come from
+# GitHub Environment Secrets or an Ansible Vault file, and the template
+# below fails the run if they are missing.

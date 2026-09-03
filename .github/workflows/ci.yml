@@ -142,6 +142,42 @@ jobs:
         run: ./tests/test-security.sh
 
   # -----------------------------------------------------------------------
+  # Ansible cannot be checked on a Windows workstation (it has no Windows
+  # control node), so this job is the only place the playbook is really
+  # parsed. It must stay in the required set.
+  ansible:
+    name: Validate Ansible
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ansible and its collections
+        run: |
+          pip install --quiet ansible-core ansible-lint
+          ansible-galaxy collection install -r infrastructure/ansible/requirements.yml
+
+      - name: Syntax check
+        working-directory: infrastructure/ansible
+        run: |
+          cp inventory/hosts.example.ini inventory/hosts.ini
+          ansible-playbook site.yml --syntax-check
+
+      - name: List the hosts each play targets
+        working-directory: infrastructure/ansible
+        run: |
+          cp inventory/hosts.example.ini inventory/hosts.ini
+          ansible-inventory --list --yaml | head -50
+
+      - name: ansible-lint
+        working-directory: infrastructure/ansible
+        run: ansible-lint
+
+  # -----------------------------------------------------------------------
   test:
     name: Tests
     runs-on: ubuntu-latest
@@ -240,7 +276,7 @@ jobs:
   ci-passed:
     name: CI passed
     runs-on: ubuntu-latest
-    needs: [lint, config, test, integration]
+    needs: [lint, config, ansible, test, integration]
     if: always()
     steps:
       - name: Verify all jobs succeeded

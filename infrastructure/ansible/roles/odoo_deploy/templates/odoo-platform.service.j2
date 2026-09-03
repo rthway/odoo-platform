@@ -1,0 +1,26 @@
+[Unit]
+Description=Odoo platform ({{ env_name }})
+Documentation=https://github.com/rthway/odoo-platform
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+User={{ deploy_user }}
+WorkingDirectory={{ app_dir }}
+EnvironmentFile={{ app_dir }}/.env
+
+# `up` without `--build`: this host must never build an image. It runs the
+# artifact the pipeline built, or it runs nothing.
+ExecStart=/usr/bin/docker compose -f compose.yml -f compose.{{ env_name }}.yml up -d --remove-orphans
+ExecStop=/usr/bin/docker compose -f compose.yml -f compose.{{ env_name }}.yml stop
+
+# Give PostgreSQL time to checkpoint cleanly on shutdown; killing it early
+# means a longer WAL replay on the next start.
+TimeoutStartSec=300
+TimeoutStopSec=180
+
+[Install]
+WantedBy=multi-user.target
