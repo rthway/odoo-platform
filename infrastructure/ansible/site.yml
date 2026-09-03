@@ -162,6 +162,20 @@
       # The target directory comes from the clone above.
       when: not ansible_check_mode
 
+    # Alertmanager cannot expand environment variables, so its config has to
+    # be rendered with real values before the container starts. Mounting the
+    # committed file directly made it crash-loop on "${SMTP_SMARTHOST}:
+    # missing port in address".
+    - name: Render the Alertmanager configuration
+      ansible.builtin.template:
+        src: "{{ app_dir }}/monitoring/alertmanager/alertmanager.yml.j2"
+        dest: "{{ app_dir }}/monitoring/alertmanager/alertmanager.generated.yml"
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: "0640"
+      no_log: true
+      when: not ansible_check_mode
+
     - name: Create the node_exporter textfile collector directory on OPS
       ansible.builtin.file:
         path: /var/lib/node_exporter/textfile_collector
