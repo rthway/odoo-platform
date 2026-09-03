@@ -1,0 +1,8 @@
+# Mounted over /etc/nginx/conf.d/default.conf to neutralise the welcome page
+# the nginx image ships.
+#
+# That file declares `server_name localhost` on port 80 and sorts BEFORE
+# odoo.conf, so nginx used it as the default server: any request that arrived
+# by IP address instead of the configured name got the welcome page, and
+# /web/login returned 404. The Odoo vhost now also claims default_server,
+# which is the real fix; this removes the ambiguity entirely.

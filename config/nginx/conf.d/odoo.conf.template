@@ -7,8 +7,14 @@
 
 # --- HTTP: redirect everything to HTTPS, except the ACME challenge ---------
 server {
-    listen 80;
-    listen [::]:80;
+    # default_server matters. The nginx image ships /etc/nginx/conf.d/
+    # default.conf, which sorts BEFORE odoo.conf and would otherwise be the
+    # default server for port 80 - so any request by IP address, rather than
+    # by the configured name, hit nginx's welcome page and got a 404 for
+    # /web/login. Claiming default_server here makes this vhost answer
+    # anything that does not match another name.
+    listen 80 default_server;
+    listen [::]:80 default_server;
     server_name ${ODOO_DOMAIN};
 
     # Let's Encrypt HTTP-01 must stay reachable over plain HTTP or renewal
@@ -19,14 +25,18 @@ server {
     }
 
     location / {
-        return 301 https://$host$request_uri;
+        # $host carries no port, so a bare `https://$host` redirect sends the
+        # browser to 443 - which is not published on DEV or QA, where nginx
+        # is on 8443. HTTPS_PUBLIC_PORT is substituted at render time and is
+        # empty in production, where 443 is the real port.
+        return 301 https://$host${HTTPS_PUBLIC_PORT}$request_uri;
     }
 }
 
 # --- HTTPS ----------------------------------------------------------------
 server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
     http2 on;
     server_name ${ODOO_DOMAIN};
 
