@@ -35,6 +35,10 @@
       # nightly backup, the weekly restore verification, retention pruning,
       # the Docker image prune - silently has nowhere to be installed.
       - cron
+      # Also absent from these images. roles/odoo_deploy clones this
+      # repository onto every host, and the deploy workflow does a
+      # `git fetch` before each deployment.
+      - git
       - age             # backup encryption
       - postgresql-client
       - jq
