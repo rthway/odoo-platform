@@ -133,7 +133,10 @@ for svc in db odoo proxy; do
         fail "${svc} has no container"
         continue
     fi
-    restarts="$(docker inspect -f '{{.State.RestartCount}}' "${cid}")"
+    # RestartCount is a top-level field of the container object, not part of
+    # .State. `{{.State.RestartCount}}` is not merely empty - it aborts the
+    # whole command with a template error.
+    restarts="$(docker inspect -f '{{.RestartCount}}' "${cid}")"
     if (( restarts > 3 )); then
         fail "${svc} has restarted ${restarts} times"
     else
