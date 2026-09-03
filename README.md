@@ -370,6 +370,7 @@ facing a new schema. That case is an incident, not a rollback — see
 | `deploy-dev.yml` | Automatic after Build | Deploy + smoke test |
 | `deploy-qa.yml` | Manual | Same tag + integration and Odoo tests |
 | `deploy-prod.yml` | Manual + **approval** | Backup, deploy, migrate, verify, roll back on failure |
+| `provision.yml` | Manual | Runs Ansible from a Linux runner; dry run by default |
 
 The CI integration job runs a **full backup and restore round trip** on every
 pull request, so the recovery path is exercised continuously rather than first
