@@ -167,6 +167,20 @@ if [[ -n "${PREVIOUS_TAG}" && "${PREVIOUS_TAG}" != "${IMAGE_TAG}" ]]; then
 fi
 echo "${IMAGE_TAG}" > "${CURRENT_FILE}"
 
+# Persist the tag into .env as well. Ansible renders ODOO_IMAGE_TAG empty
+# because the tag is a property of the deployment, not of the host - but that
+# leaves every OTHER script that shells out to compose (backup.sh from cron,
+# healthcheck.sh, restore.sh, migrate.sh) failing with "required variable
+# ODOO_IMAGE_TAG is missing a value". Writing it here means a nightly backup
+# works without having to know which tag is deployed.
+if grep -qE '^ODOO_IMAGE_TAG=' "${COMPOSE_DIR}/.env"; then
+    sed -i "s|^ODOO_IMAGE_TAG=.*|ODOO_IMAGE_TAG=${IMAGE_TAG}|" "${COMPOSE_DIR}/.env"
+else
+    printf 'ODOO_IMAGE_TAG=%s
+' "${IMAGE_TAG}" >> "${COMPOSE_DIR}/.env"
+fi
+log "recorded ${IMAGE_TAG} in .env for standalone script use"
+
 printf '%s deploy env=%s tag=%s digest=%s previous=%s backup=%s\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${ENVIRONMENT}" "${IMAGE_TAG}" \
     "${DIGEST}" "${PREVIOUS_TAG:-none}" "${BACKUP_SET:-none}" >> "${HISTORY_FILE}"
