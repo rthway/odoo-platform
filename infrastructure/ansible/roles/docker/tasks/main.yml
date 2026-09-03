@@ -113,6 +113,9 @@
     groups: docker
     append: true
   loop: "{{ docker_users }}"
+  # The docker group is created by the engine package, which check mode did
+  # not install.
+  when: not ansible_check_mode
 
 # Docker socket access is root-equivalent. Recorded here so the security
 # documentation and reality do not drift apart.
