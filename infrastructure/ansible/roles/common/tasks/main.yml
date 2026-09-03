@@ -82,6 +82,11 @@
     name: chrony
     state: started
     enabled: true
+  # Under --check the package install above is only simulated, so the service
+  # does not exist yet and this fails with an error that looks like a real
+  # defect. Skipping keeps a dry run usable for reviewing a production change,
+  # which is exactly when a dry run matters.
+  when: not ansible_check_mode
   tags: [time]
 
 # ---------------------------------------------------------------------------
@@ -128,59 +133,68 @@
 - name: Validate the SSH configuration before restarting
   ansible.builtin.command: sshd -t
   changed_when: false
+  # sshd -t validates the file on disk, which check mode has not written.
+  when: not ansible_check_mode
   tags: [ssh]
 
 # ---------------------------------------------------------------------------
 # Firewall - order matters, see the header
 # ---------------------------------------------------------------------------
-- name: Allow SSH before anything else
-  community.general.ufw:
-    rule: allow
-    port: "22"
-    proto: tcp
-    comment: "SSH - added before default deny to avoid lockout"
+# One block, one guard. ufw is installed by this same play, so under --check
+# there is no firewall for the module to talk to and every rule below would
+# fail. Guarding the block keeps a dry run readable instead of drowning it in
+# six identical errors.
+- name: Configure the firewall
+  when: not ansible_check_mode
   tags: [firewall]
+  block:
 
-- name: Allow outbound traffic
-  community.general.ufw:
-    direction: outgoing
-    policy: allow
-  tags: [firewall]
+    - name: Allow SSH before anything else
+      community.general.ufw:
+        rule: allow
+        port: "22"
+        proto: tcp
+        comment: "SSH - added before default deny to avoid lockout"
 
-- name: Allow HTTP and HTTPS on application servers
-  community.general.ufw:
-    rule: allow
-    port: "{{ item }}"
-    proto: tcp
-    comment: "Odoo ingress"
-  loop: ["80", "443"]
-  when: "'app' in group_names"
-  tags: [firewall]
+    - name: Allow outbound traffic
+      community.general.ufw:
+        direction: outgoing
+        policy: allow
 
-# Exporters are scraped only by the OPS server. Opening them to the world
-# would publish detailed internal metrics to anyone who asks.
-- name: Allow the monitoring server to scrape exporters
-  community.general.ufw:
-    rule: allow
-    port: "{{ item }}"
-    proto: tcp
-    src: "{{ monitoring_server_ip }}"
-    comment: "Prometheus scrape from OPS only"
-  loop: ["9100", "9187", "8081"]
-  when: "'app' in group_names"
-  tags: [firewall]
+    - name: Allow HTTP and HTTPS on application servers
+      community.general.ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+        comment: "Odoo ingress"
+      loop: ["80", "443"]
+      when: "'app' in group_names"
 
-- name: Deny all other inbound traffic
-  community.general.ufw:
-    direction: incoming
-    policy: deny
-  tags: [firewall]
+    # Exporters are scraped only by the OPS server. Opening them to the world
+    # would publish detailed internal metrics to anyone who asks.
+    #
+    # The source is the INTERNAL address: every host sources traffic from its
+    # 192.168.2.x interface even when dialling a public one, so a rule naming
+    # the public address would never match.
+    - name: Allow the monitoring server to scrape exporters
+      community.general.ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+        src: "{{ monitoring_server_ip }}"
+        comment: "Prometheus scrape from OPS only"
+      loop: ["9100", "9187", "8081"]
+      when: "'app' in group_names"
 
-- name: Enable the firewall
-  community.general.ufw:
-    state: enabled
-    logging: "on"
-  tags: [firewall]
+    - name: Deny all other inbound traffic
+      community.general.ufw:
+        direction: incoming
+        policy: deny
+
+    - name: Enable the firewall
+      community.general.ufw:
+        state: enabled
+        logging: "on"
 
 # ---------------------------------------------------------------------------
 # fail2ban
@@ -210,6 +224,8 @@
     name: fail2ban
     state: started
     enabled: true
+  # Installed by this same play, so it does not exist yet under --check.
+  when: not ansible_check_mode
   tags: [security]
 
 # ---------------------------------------------------------------------------

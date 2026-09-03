@@ -87,6 +87,8 @@
   no_log: "{{ item.name == 'postgres-exporter' }}"
   loop_control:
     label: "{{ item.name }}"
+  # Needs a running Docker daemon; check mode has not installed one.
+  when: not ansible_check_mode
 
 - name: Connect postgres-exporter to the application backend network
   community.docker.docker_network:
@@ -96,6 +98,7 @@
     appends: true
   # The network only exists once the application stack has been created.
   failed_when: false
+  when: not ansible_check_mode
 
 - name: Run promtail
   community.docker.docker_container:
@@ -115,3 +118,5 @@
       # is still a powerful grant - recorded in docs/security.md.
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "promtail-positions:/var/lib/promtail"
+  # Needs a running Docker daemon; check mode has not installed one.
+  when: not ansible_check_mode

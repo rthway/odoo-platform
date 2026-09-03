@@ -98,6 +98,8 @@
   when:
     - not tls_cert.stat.exists
     - env_name != "prod"
+    # openssl would write real files during what is meant to be a dry run.
+    - not ansible_check_mode
   ansible.builtin.command:
     cmd: >-
       openssl req -x509 -nodes -days 365 -newkey rsa:2048
@@ -138,6 +140,9 @@
     name: odoo-platform
     enabled: true
     daemon_reload: true
+  # The unit file is written by the task above, which check mode only
+  # simulates, so there is nothing to enable yet.
+  when: not ansible_check_mode
   tags: [systemd]
 
 # ---------------------------------------------------------------------------
@@ -147,7 +152,11 @@
   ansible.builtin.command:
     cmd: docker login -u {{ dockerhub_username }} --password-stdin
     stdin: "{{ dockerhub_token }}"
-  when: dockerhub_username is defined and dockerhub_token is defined
+  when:
+    - dockerhub_username is defined
+    - dockerhub_token is defined
+    # Needs a running Docker daemon, which check mode has not installed.
+    - not ansible_check_mode
   no_log: true
   changed_when: false
   tags: [registry]

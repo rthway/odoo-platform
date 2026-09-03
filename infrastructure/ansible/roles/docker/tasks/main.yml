@@ -79,6 +79,9 @@
     name: docker
     state: started
     enabled: true
+  # Docker is installed by this same play, so under --check the service does
+  # not exist yet.
+  when: not ansible_check_mode
 
 - name: Add the deployment user to the docker group
   ansible.builtin.user:
