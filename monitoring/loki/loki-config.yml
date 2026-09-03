@@ -1,0 +1,77 @@
+---
+# ===========================================================================
+# Loki - centralised log storage (single-binary, filesystem backed)
+# ===========================================================================
+# Sized for four servers. A single Loki instance with local storage is the
+# right complexity for this platform; object storage and a microservices
+# deployment would add operational burden with no benefit at this scale.
+# ===========================================================================
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: warn
+  # Odoo tracebacks are long; the default 4MB limit truncates them.
+  grpc_server_max_recv_msg_size: 8388608
+  grpc_server_max_send_msg_size: 8388608
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  # Containers and hosts drift; rejecting slightly out-of-order or slightly
+  # old entries loses exactly the logs wanted during an incident.
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  max_query_length: 721h
+  max_query_parallelism: 16
+  ingestion_rate_mb: 16
+  ingestion_burst_size_mb: 32
+  # Bound cardinality: a label per request id would destroy the index.
+  max_label_names_per_series: 20
+  volume_enabled: true
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+  compaction_interval: 10m
+
+table_manager:
+  retention_deletes_enabled: true
+  # 30 days. Long enough for post-incident review, short enough that a modest
+  # OPS disk is not the constraint.
+  retention_period: 720h
+
+ruler:
+  storage:
+    type: local
+    local:
+      directory: /loki/rules
+  rule_path: /loki/rules-temp
+  alertmanager_url: http://alertmanager:9093
+  enable_api: true
+
+analytics:
+  reporting_enabled: false

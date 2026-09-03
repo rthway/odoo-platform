@@ -1,0 +1,146 @@
+---
+# ===========================================================================
+# Promtail - ships logs to Loki
+# ===========================================================================
+# Runs on DEV, QA and PROD (installed by the Ansible monitoring_agent role).
+# The environment label is templated per host; without it, searching for an
+# error means searching every server at once.
+#
+# Design rule: keep label cardinality LOW. Labels are indexed, log lines are
+# not. A label per request id or per user would make Loki unusable.
+# ===========================================================================
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: warn
+
+positions:
+  # Survives restarts, so a promtail restart does not re-ship or skip logs.
+  filename: /var/lib/promtail/positions.yaml
+
+clients:
+  - url: http://157.10.100.232:3100/loki/api/v1/push
+    # A short backoff loses logs during a Loki restart; this rides it out.
+    backoff_config:
+      min_period: 500ms
+      max_period: 5m
+      max_retries: 20
+    external_labels:
+      host: ${HOSTNAME}
+      environment: ${ENVIRONMENT}
+
+scrape_configs:
+
+  # -----------------------------------------------------------------------
+  # Docker containers, discovered dynamically. Static paths would miss any
+  # container created after promtail started.
+  # -----------------------------------------------------------------------
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 15s
+
+    relabel_configs:
+      # Compose service name -> `service` label. This is the label people
+      # actually filter on: {service="odoo"}.
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: service
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_project"]
+        target_label: stack
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(.*)"
+        target_label: container
+      # Drop containers not managed by compose (one-off exec containers,
+      # build helpers) - they are noise, not service logs.
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        regex: ""
+        action: drop
+
+    pipeline_stages:
+      # --- Odoo -------------------------------------------------------
+      # Odoo's format: 2026-09-03 10:15:32,123 7 INFO db module: message
+      - match:
+          selector: '{service="odoo"}'
+          stages:
+            - regex:
+                expression: '^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) (?P<pid>\d+) (?P<level>[A-Z]+) (?P<odoo_db>\S+) (?P<logger>\S+): (?P<msg>.*)$'
+            - labels:
+                # level only. Adding logger or db here would multiply
+                # cardinality for little query benefit.
+                level:
+            - timestamp:
+                source: ts
+                format: "2006-01-02 15:04:05,000"
+            # Tracebacks arrive as many lines; collapse them into the entry
+            # they belong to, or every incident review is a jigsaw puzzle.
+            - multiline:
+                firstline: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}'
+                max_wait_time: 3s
+                max_lines: 200
+
+      # --- PostgreSQL --------------------------------------------------
+      - match:
+          selector: '{service="db"}'
+          stages:
+            - regex:
+                expression: '^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ \w+) \[(?P<pid>\d+)\] (?P<level>[A-Z]+):\s+(?P<msg>.*)$'
+            - labels:
+                level:
+
+      # --- nginx (JSON access log) -------------------------------------
+      - match:
+          selector: '{service="proxy"}'
+          stages:
+            - json:
+                expressions:
+                  status: status
+                  request_time: request_time
+                  method: request_method
+            - labels:
+                # Status is bounded (a few dozen values), so it is safe as a
+                # label and makes "show me the 5xx" a one-line query.
+                status:
+            # Slow requests become a metric, not just a log line.
+            - metrics:
+                nginx_slow_requests_total:
+                  type: Counter
+                  description: "Requests slower than 5 seconds"
+                  source: request_time
+                  config:
+                    value: ""
+                    action: inc
+                    match_all: false
+
+  # -----------------------------------------------------------------------
+  # Host system logs - SSH, sudo, kernel, systemd. Where "who restarted the
+  # database at 02:00?" is answered.
+  # -----------------------------------------------------------------------
+  - job_name: syslog
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: syslog
+          host: ${HOSTNAME}
+          environment: ${ENVIRONMENT}
+          __path__: /var/log/{syslog,messages,auth.log,secure}
+
+    pipeline_stages:
+      - regex:
+          expression: '^(?P<ts>\w{3}\s+\d+ \d{2}:\d{2}:\d{2}) (?P<hostname>\S+) (?P<program>[^:\[]+)(\[\d+\])?: (?P<msg>.*)$'
+      - labels:
+          program:
+      # Authentication failures are security-relevant; surface them as a
+      # metric so a brute-force attempt can alert rather than only be logged.
+      - match:
+          selector: '{job="syslog"}'
+          stages:
+            - regex:
+                expression: '(?i)(?P<authfail>failed password|authentication failure|invalid user)'
+            - metrics:
+                ssh_auth_failures_total:
+                  type: Counter
+                  description: "Failed SSH authentication attempts"
+                  source: authfail
+                  config:
+                    action: inc

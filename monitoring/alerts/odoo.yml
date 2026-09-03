@@ -1,0 +1,339 @@
+---
+# ===========================================================================
+# Alert rules
+# ===========================================================================
+# Severity means something specific here:
+#   critical - a person is paged now; production is affected or about to be
+#   warning  - someone looks at it during working hours
+#   info     - visible on dashboards, never paged
+#
+# Every `for:` duration is deliberate. Alerting on an instantaneous spike
+# trains people to ignore alerts, which is worse than having none.
+# ===========================================================================
+
+groups:
+
+  # =======================================================================
+  - name: availability
+    rules:
+
+      - alert: OdooDown
+        # Blackbox probe failing means Odoo is not answering HTTP at all.
+        expr: probe_success{service="odoo"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Odoo is DOWN in {{ $labels.environment }}"
+          description: "{{ $labels.instance }} has failed its HTTP probe for 2 minutes."
+          runbook: "docs/runbooks/application-down.md"
+
+      - alert: OdooDownProduction
+        # Same condition, separated so routing can page harder for prod
+        # without duplicating every downstream rule.
+        expr: probe_success{service="odoo", environment="prod"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          page: "true"
+        annotations:
+          summary: "PRODUCTION Odoo is DOWN"
+          description: "Production has not answered an HTTP probe for 1 minute."
+          runbook: "docs/runbooks/application-down.md"
+
+      - alert: ServerDown
+        expr: up{job="node"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Server {{ $labels.instance_name }} is unreachable"
+          description: "node_exporter on {{ $labels.instance }} ({{ $labels.environment }}) has not responded for 2 minutes."
+          runbook: "docs/runbooks/application-down.md"
+
+      - alert: PostgreSQLDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL is DOWN in {{ $labels.environment }}"
+          description: "Odoo cannot function without its database."
+          runbook: "docs/runbooks/database-unavailable.md"
+
+      - alert: OdooSlow
+        # p95 latency, not the mean: an average stays comfortable while a
+        # quarter of users are timing out.
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, environment) (rate(probe_duration_seconds_bucket{service="odoo"}[5m]))
+          ) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Odoo is slow in {{ $labels.environment }}"
+          description: "95th percentile response time has exceeded 5s for 10 minutes."
+          runbook: "docs/runbooks/high-cpu.md"
+
+  # =======================================================================
+  - name: resources
+    rules:
+
+      - alert: HighCPU
+        expr: |
+          100 - (avg by (instance, environment, instance_name)
+            (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU above 90% on {{ $labels.instance_name }}"
+          description: "Sustained for 15 minutes. Current: {{ $value | printf \"%.1f\" }}%."
+          runbook: "docs/runbooks/high-cpu.md"
+
+      - alert: HighMemory
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory above 90% on {{ $labels.instance_name }}"
+          description: "MemAvailable is under 10%. Odoo workers may be OOM-killed."
+          runbook: "docs/runbooks/high-cpu.md"
+
+      - alert: DiskSpaceLow
+        expr: |
+          (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}
+                / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"})) * 100 > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk above 80% on {{ $labels.instance_name }} ({{ $labels.mountpoint }})"
+          description: "Act now: a full disk on a database host causes data loss, not just an outage."
+          runbook: "docs/runbooks/disk-full.md"
+
+      - alert: DiskSpaceCritical
+        expr: |
+          (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}
+                / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"})) * 100 > 90
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk above 90% on {{ $labels.instance_name }} ({{ $labels.mountpoint }})"
+          description: "PostgreSQL will stop accepting writes when this fills."
+          runbook: "docs/runbooks/disk-full.md"
+
+      - alert: DiskWillFillIn24Hours
+        # Trend-based: catches a runaway log or a backup loop long before the
+        # threshold alerts fire, which is the difference between a ticket and
+        # an incident.
+        expr: |
+          predict_linear(node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}[6h], 24 * 3600) < 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.mountpoint }} on {{ $labels.instance_name }} will fill within 24h"
+          description: "Based on the last 6 hours of growth."
+          runbook: "docs/runbooks/disk-full.md"
+
+  # =======================================================================
+  - name: containers
+    rules:
+
+      - alert: ContainerRestarting
+        # A container whose start time keeps moving is crash-looping, even
+        # though `docker ps` shows it as "running" each time you look.
+        expr: |
+          changes(container_start_time_seconds{container_label_com_docker_compose_service!=""}[15m]) > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.container_label_com_docker_compose_service }} is restarting repeatedly"
+          description: "More than 3 restarts in 15 minutes on {{ $labels.instance_name }}."
+          runbook: "docs/runbooks/application-down.md"
+
+      - alert: ContainerMemoryNearLimit
+        expr: |
+          (container_memory_working_set_bytes{container_label_com_docker_compose_service!=""}
+           / container_spec_memory_limit_bytes{container_label_com_docker_compose_service!=""}) * 100 > 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.container_label_com_docker_compose_service }} is near its memory limit"
+          description: "Above 90% of its cgroup limit; the OOM killer is next."
+
+      - alert: ContainerDisappeared
+        expr: |
+          absent(container_last_seen{container_label_com_docker_compose_service="odoo"})
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The Odoo container has disappeared"
+          description: "cAdvisor no longer reports an odoo container on this host."
+          runbook: "docs/runbooks/application-down.md"
+
+  # =======================================================================
+  - name: postgresql
+    rules:
+
+      - alert: PostgreSQLTooManyConnections
+        expr: |
+          sum by (environment, instance_name) (pg_stat_activity_count)
+            / on (environment, instance_name) pg_settings_max_connections * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL connections above 80% in {{ $labels.environment }}"
+          description: "New connections will be refused at 100%, and Odoo will start throwing errors."
+          runbook: "docs/runbooks/database-unavailable.md"
+
+      - alert: PostgreSQLDeadlocks
+        expr: rate(pg_stat_database_deadlocks[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Deadlocks in {{ $labels.environment }}"
+          description: "Deadlocks abort user transactions; users see them as lost work."
+
+      - alert: PostgreSQLLongRunningTransaction
+        # Long transactions hold back vacuum, which bloats tables and
+        # eventually threatens transaction ID wraparound.
+        expr: pg_stat_activity_max_tx_duration{state="active"} > 600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A transaction has been open over 10 minutes in {{ $labels.environment }}"
+          description: "This blocks autovacuum and causes table bloat."
+
+      - alert: PostgreSQLLowCacheHitRatio
+        expr: |
+          sum by (environment) (rate(pg_stat_database_blks_hit[10m]))
+          / (sum by (environment) (rate(pg_stat_database_blks_hit[10m]))
+             + sum by (environment) (rate(pg_stat_database_blks_read[10m]))) < 0.95
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "PostgreSQL cache hit ratio below 95% in {{ $labels.environment }}"
+          description: "Consider raising shared_buffers, or look for a query doing sequential scans."
+
+      - alert: PostgreSQLReplicationOrWALStalled
+        expr: rate(pg_stat_archiver_archived_count[15m]) == 0 and pg_stat_archiver_failed_count > 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "WAL archiving has stalled in {{ $labels.environment }}"
+          description: >-
+            WAL is no longer being archived, so point-in-time recovery is
+            broken and pg_wal will grow until the disk fills.
+          runbook: "docs/runbooks/backup-failed.md"
+
+  # =======================================================================
+  - name: backup
+    rules:
+
+      - alert: BackupStale
+        # The most valuable alert in the file. A backup system that quietly
+        # stopped is indistinguishable from one that works, until a restore.
+        expr: |
+          time() - odoo_backup_last_success_timestamp_seconds{environment="prod"} > 93600
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "No successful production backup in over 26 hours"
+          description: "Expected daily. The recovery point is degrading every hour."
+          runbook: "docs/runbooks/backup-failed.md"
+
+      - alert: BackupMissingEntirely
+        expr: absent(odoo_backup_last_success_timestamp_seconds{environment="prod"})
+        for: 6h
+        labels:
+          severity: critical
+        annotations:
+          summary: "No production backup metric is being reported at all"
+          description: >-
+            Either backups have never run, or the textfile collector is
+            misconfigured. Both mean backup status is unknown.
+          runbook: "docs/runbooks/backup-failed.md"
+
+      - alert: BackupRestoreNeverVerified
+        # Checksums prove bytes; only a restore proves a backup.
+        expr: |
+          time() - odoo_backup_verify_last_success_timestamp_seconds > 2678400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "No verified restore test in over 30 days"
+          description: "An unverified backup is an assumption, not a recovery plan."
+          runbook: "docs/runbooks/restore-database.md"
+
+      - alert: BackupDurationGrowing
+        expr: odoo_backup_duration_seconds > 3600
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "Backups are taking over an hour in {{ $labels.environment }}"
+          description: "Backup duration is a lower bound on RTO; growth here erodes the recovery target."
+
+  # =======================================================================
+  - name: tls
+    rules:
+
+      - alert: CertificateExpiringSoon
+        expr: (probe_ssl_earliest_cert_expiry - time()) / 86400 < 21
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "TLS certificate for {{ $labels.instance }} expires in under 21 days"
+          description: "Let's Encrypt renews at 30 days; reaching 21 means renewal is failing."
+          runbook: "docs/runbooks/certificate-expired.md"
+
+      - alert: CertificateExpiringCritical
+        expr: (probe_ssl_earliest_cert_expiry - time()) / 86400 < 7
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "TLS certificate for {{ $labels.instance }} expires in under 7 days"
+          description: "Every user will get a browser security warning when it lapses."
+          runbook: "docs/runbooks/certificate-expired.md"
+
+  # =======================================================================
+  - name: monitoring-integrity
+    rules:
+
+      - alert: PrometheusTargetMissing
+        expr: up == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus cannot scrape {{ $labels.job }} on {{ $labels.instance }}"
+          description: "Metrics for this target are missing, so its alerts cannot fire."
+
+      - alert: AlertmanagerUnreachable
+        # Without this, a broken Alertmanager silences everything, and the
+        # monitoring system looks healthiest exactly when it has failed.
+        expr: up{job="prometheus"} == 1 and absent(up{job="alertmanager"} == 1)
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Alertmanager is unreachable - alerts are NOT being delivered"
+          description: "Prometheus is evaluating rules but cannot dispatch notifications."

@@ -1,0 +1,27 @@
+---
+# Datasources are provisioned as code so a rebuilt Grafana comes back
+# identical, and so nobody has to remember which URL Loki was on.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # Must match Prometheus' scrape_interval, or rate() windows in the
+      # dashboards silently return no data at short ranges.
+      timeInterval: "15s"
+      httpMethod: POST
+      manageAlerts: false
+
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false
+    jsonData:
+      maxLines: 2000
+
