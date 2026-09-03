@@ -1,0 +1,256 @@
+---
+# ===========================================================================
+# CI - runs on every pull request and every push to main/develop
+# ===========================================================================
+# Fast, cheap checks that must pass before anything is built or deployed.
+# Image building lives in build.yml; deep security scanning in security.yml.
+# ===========================================================================
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Superseded PR runs are cancelled, but never on main/develop where the
+  # result is a record of what that commit actually passed.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/develop' }}
+
+permissions:
+  contents: read
+
+jobs:
+
+  # -----------------------------------------------------------------------
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint shell scripts
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          # -x follows sourced files. Every script must pass; there is no
+          # allowance for "warnings only" because past experience is that
+          # unquoted variables in a deploy script become a production issue.
+          shellcheck -x -S warning scripts/*.sh docker/odoo/*.sh tests/*.sh
+
+      - name: Check scripts are executable
+        run: |
+          fail=0
+          for f in scripts/*.sh docker/odoo/*.sh tests/*.sh; do
+            if [ ! -x "$f" ]; then echo "not executable: $f"; fail=1; fi
+          done
+          exit $fail
+
+      - name: Lint YAML
+        run: |
+          pip install --quiet yamllint==1.35.1
+          yamllint -c .yamllint .github/ monitoring/ infrastructure/ ./*.yml
+
+      - name: Lint Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: docker/odoo/Dockerfile
+          config: .hadolint.yaml
+
+      - name: Lint GitHub Actions workflows
+        run: |
+          # actionlint catches invalid expressions and bad `uses:` refs that
+          # would otherwise only surface as a failed run on main.
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+
+  # -----------------------------------------------------------------------
+  config:
+    name: Validate configuration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate every Compose overlay resolves
+        run: |
+          set -euo pipefail
+          for env in dev qa prod; do
+            echo "::group::compose config - $env"
+            cp ".env.${env}.example" .env.ci
+            # Fill the required-but-empty placeholders so interpolation can
+            # resolve. These are throwaway CI values, never real secrets.
+            sed -i \
+              -e 's/^POSTGRES_PASSWORD=$/POSTGRES_PASSWORD=ci-only/' \
+              -e 's/^ODOO_ADMIN_PASSWD=$/ODOO_ADMIN_PASSWD=ci-only/' \
+              -e 's/^ODOO_IMAGE_TAG=$/ODOO_IMAGE_TAG=0.0.0-ci/' \
+              -e 's/^ODOO_DOMAIN=$/ODOO_DOMAIN=example.invalid/' \
+              .env.ci
+            docker compose --env-file .env.ci -f compose.yml -f "compose.${env}.yml" config > "/tmp/resolved-${env}.yml"
+            echo "::endgroup::"
+          done
+
+      - name: Assert environment isolation
+        run: |
+          # These are the properties that keep QA away from production data
+          # and keep the database manager off the internet. A regression here
+          # is a security incident, so it is asserted, not reviewed by eye.
+          python3 - <<'PY'
+          import sys, yaml
+
+          failures = []
+          seen_db = {}
+
+          for env in ("dev", "qa", "prod"):
+              with open(f"/tmp/resolved-{env}.yml") as fh:
+                  cfg = yaml.safe_load(fh)
+              odoo = cfg["services"]["odoo"]["environment"]
+
+              db = odoo.get("ODOO_DB_NAME")
+              if db in seen_db:
+                  failures.append(f"{env} shares database '{db}' with {seen_db[db]}")
+              seen_db[db] = env
+
+              if env in ("qa", "prod") and str(odoo.get("ODOO_LIST_DB")) != "False":
+                  failures.append(f"{env} has ODOO_LIST_DB={odoo.get('ODOO_LIST_DB')}, must be False")
+
+              if env in ("qa", "prod"):
+                  binds = [v for v in cfg["services"]["odoo"].get("volumes", [])
+                           if v.get("type") == "bind"]
+                  if binds:
+                      failures.append(f"{env} bind-mounts from the host: {binds}")
+
+              if "ports" in cfg["services"]["db"]:
+                  failures.append(f"{env} publishes a database port")
+
+              proj = cfg.get("name")
+              if proj != f"odoo-{env}":
+                  failures.append(f"{env} project name is '{proj}', expected 'odoo-{env}'")
+
+          if failures:
+              print("ENVIRONMENT ISOLATION VIOLATIONS:")
+              for f in failures:
+                  print(f"  - {f}")
+              sys.exit(1)
+          print("environment isolation assertions passed")
+          PY
+
+      - name: Assert no real secrets in example files
+        run: ./tests/test-security.sh
+
+  # -----------------------------------------------------------------------
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: pip install --quiet pytest pyyaml
+
+      - name: Configuration and unit tests
+        run: ./tests/run-all.sh
+
+  # -----------------------------------------------------------------------
+  # Builds the image and runs Odoo for real against a real PostgreSQL. This
+  # is the check that catches "the config renders but Odoo will not start",
+  # which no amount of linting will find.
+  integration:
+    name: Integration (real Odoo + PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/odoo/Dockerfile
+          tags: odoo-platform:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+            VCS_REF=${{ github.sha }}
+            VERSION=ci
+
+      - name: Start the stack
+        run: |
+          set -euo pipefail
+          cp .env.dev.example .env
+          sed -i \
+            -e 's/^POSTGRES_PASSWORD=$/POSTGRES_PASSWORD=ci-integration-pw/' \
+            -e 's/^ODOO_ADMIN_PASSWD=$/ODOO_ADMIN_PASSWD=ci-integration-admin/' \
+            -e 's|^ODOO_IMAGE=.*|ODOO_IMAGE=odoo-platform|' \
+            -e 's/^ODOO_IMAGE_TAG=$/ODOO_IMAGE_TAG=ci/' \
+            .env
+          docker compose -f compose.yml -f compose.dev.yml up -d
+
+      - name: Initialise the Odoo database
+        run: |
+          # A fresh database has no schema. Install base so the smoke tests
+          # exercise a real, initialised Odoo rather than an empty shell.
+          docker compose -f compose.yml -f compose.dev.yml exec -T odoo \
+            odoo --config=/etc/odoo/odoo.conf --database=odoo_dev \
+                 --init=base --stop-after-init --no-http
+
+      - name: Restart and health check
+        run: |
+          docker compose -f compose.yml -f compose.dev.yml up -d
+          ./scripts/healthcheck.sh -e dev -t 300
+
+      - name: Smoke tests
+        run: ./tests/test-smoke.sh
+
+      - name: Backup and restore round trip
+        run: |
+          # Proves the backup path works against a real database, and that
+          # verify-backup can restore what backup.sh produced. Cheap here,
+          # invaluable the first time it is needed for real.
+          sudo mkdir -p /var/backups/odoo && sudo chown "$USER" /var/backups/odoo
+          SET=$(./scripts/backup.sh -e dev -l ci | tail -1)
+          echo "backup set: $SET"
+          ./scripts/verify-backup.sh -s "$SET" --restore
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          docker compose -f compose.yml -f compose.dev.yml ps
+          docker compose -f compose.yml -f compose.dev.yml logs --tail 200
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f compose.yml -f compose.dev.yml down -v
+
+  # -----------------------------------------------------------------------
+  # Single required status check for branch protection. Adding a job above
+  # without adding it here would silently make it non-blocking.
+  ci-passed:
+    name: CI passed
+    runs-on: ubuntu-latest
+    needs: [lint, config, test, integration]
+    if: always()
+    steps:
+      - name: Verify all jobs succeeded
+        run: |
+          results='${{ join(needs.*.result, ' ') }}'
+          echo "job results: $results"
+          for r in $results; do
+            if [ "$r" != "success" ]; then
+              echo "CI failed: a required job reported '$r'"
+              exit 1
+            fi
+          done
+          echo "all CI jobs passed"

@@ -1,0 +1,138 @@
+---
+# ===========================================================================
+# Deploy to DEV (157.10.100.223)
+# ===========================================================================
+# Automatic: every successful Build on develop lands here. DEV is where a
+# change first meets a real database, so it must be cheap and unattended.
+#
+# The Docker daemon is NOT exposed to GitHub Actions. The runner opens an SSH
+# session and asks the server to run scripts/deploy.sh; the server pulls its
+# own image. A leaked runner token therefore cannot drive Docker directly.
+# ===========================================================================
+name: Deploy DEV
+
+on:
+  workflow_run:
+    workflows: [Build]
+    types: [completed]
+    branches: [develop]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to deploy (e.g. 2026.09.03-a1b2c3d)"
+        required: true
+        type: string
+
+concurrency:
+  # One deployment at a time per environment. Two concurrent `compose up`
+  # runs against the same host interleave and leave it in an unknown state.
+  group: deploy-dev
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+
+  deploy:
+    name: Deploy to DEV
+    # Skip when the triggering Build failed; deploying an unbuilt tag would
+    # only fail slower and further from the cause.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment:
+      name: dev
+      url: ${{ vars.DEV_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # -------------------------------------------------------------------
+      - name: Resolve the image tag
+        id: tag
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.image_tag }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_DATE: ${{ github.event.workflow_run.created_at }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
+          else
+            # Reconstruct the tag Build produced: <UTC date>-<short sha>.
+            TAG="$(date -u -d "$RUN_DATE" +%Y.%m.%d)-$(echo "$RUN_SHA" | cut -c1-7)"
+          fi
+          [ -n "$TAG" ] || { echo "could not resolve an image tag"; exit 1; }
+          [ "$TAG" != "latest" ] || { echo "refusing to deploy 'latest'"; exit 1; }
+          echo "image-tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Deploying tag: $TAG"
+
+      # -------------------------------------------------------------------
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          # Pinned host keys. Without these, StrictHostKeyChecking would have
+          # to be disabled, and the deployment could be silently redirected.
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Deploy
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          APP_DIR: ${{ vars.APP_DIR || '/opt/odoo-platform' }}
+          IMAGE_TAG: ${{ steps.tag.outputs.image-tag }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/id_deploy \
+              -o StrictHostKeyChecking=yes \
+              -o ConnectTimeout=15 \
+              "${SSH_USER}@${SSH_HOST}" \
+              "cd '${APP_DIR}' && git fetch --quiet origin && git checkout --quiet '${{ github.sha }}' 2>/dev/null || true; \
+               ./scripts/deploy.sh -e dev -t '${IMAGE_TAG}'"
+
+      # -------------------------------------------------------------------
+      # Verify from OUTSIDE the server. The deploy script already health
+      # checks locally; this confirms the service is reachable the way a user
+      # reaches it, which local checks cannot prove.
+      # -------------------------------------------------------------------
+      - name: Smoke test from the runner
+        if: vars.DEV_URL != ''
+        env:
+          DEV_URL: ${{ vars.DEV_URL }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 10); do
+            code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 15 "${DEV_URL}/web/login" || echo 000)
+            echo "attempt $i: HTTP $code"
+            if [ "$code" = "200" ] || [ "$code" = "303" ]; then
+              echo "DEV is serving"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "DEV did not serve a login page"
+          exit 1
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### DEV deployment"
+            echo ""
+            echo "- tag: \`${{ steps.tag.outputs.image-tag }}\`"
+            echo "- commit: \`${{ github.sha }}\`"
+            echo "- result: ${{ job.status }}"
+            echo ""
+            echo "Promote to QA: run the **Deploy QA** workflow with this tag."
+          } >> "$GITHUB_STEP_SUMMARY"

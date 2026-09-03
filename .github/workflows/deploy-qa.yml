@@ -1,0 +1,163 @@
+---
+# ===========================================================================
+# Deploy to QA / UAT (157.10.100.230)
+# ===========================================================================
+# QA runs the EXACT tag that was validated in DEV. This workflow has no build
+# step at all - that absence is the guarantee.
+#
+# QA is where integration and functional tests run, because it is the first
+# environment configured like production: multi-worker, list_db disabled,
+# addons from the image only, and its own database that PROD never shares.
+# ===========================================================================
+name: Deploy QA
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag validated in DEV (e.g. 2026.09.03-a1b2c3d)"
+        required: true
+        type: string
+      skip_integration_tests:
+        description: "Skip integration tests (emergency use only)"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: deploy-qa
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+
+  verify-image:
+    name: Verify the image exists and was scanned
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Confirm the tag is published
+        env:
+          IMAGE: ${{ vars.DOCKERHUB_NAMESPACE || 'rthway' }}/odoo-platform
+          TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          [ "$TAG" != "latest" ] || { echo "refusing to promote the mutable tag 'latest'"; exit 1; }
+          # Promoting a tag that does not exist should fail here, in seconds,
+          # rather than half-way through a deployment on the QA host.
+          if ! docker manifest inspect "docker.io/${IMAGE}:${TAG}" > /dev/null 2>&1; then
+            echo "image docker.io/${IMAGE}:${TAG} was not found on Docker Hub"
+            echo "Only tags produced by the Build workflow can be promoted."
+            exit 1
+          fi
+          echo "confirmed: docker.io/${IMAGE}:${TAG}"
+
+  deploy:
+    name: Deploy to QA
+    needs: verify-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: qa
+      url: ${{ vars.QA_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Deploy
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          APP_DIR: ${{ vars.APP_DIR || '/opt/odoo-platform' }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+              "${SSH_USER}@${SSH_HOST}" \
+              "cd '${APP_DIR}' && ./scripts/deploy.sh -e qa -t '${IMAGE_TAG}'"
+
+      # -------------------------------------------------------------------
+      - name: Integration tests
+        if: ${{ !inputs.skip_integration_tests }}
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          APP_DIR: ${{ vars.APP_DIR || '/opt/odoo-platform' }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes \
+              "${SSH_USER}@${SSH_HOST}" \
+              "cd '${APP_DIR}' && ./tests/test-integration.sh -e qa"
+
+      - name: Odoo module tests
+        if: ${{ !inputs.skip_integration_tests }}
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          APP_DIR: ${{ vars.APP_DIR || '/opt/odoo-platform' }}
+        run: |
+          set -euo pipefail
+          # Odoo's own test runner against the QA database, in a throwaway
+          # container so a failing test cannot leave QA half-updated.
+          ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes \
+              "${SSH_USER}@${SSH_HOST}" \
+              "cd '${APP_DIR}' && ./tests/test-odoo-modules.sh -e qa"
+
+      - name: Functional smoke test from the runner
+        if: vars.QA_URL != ''
+        env:
+          QA_URL: ${{ vars.QA_URL }}
+        run: |
+          set -euo pipefail
+          echo "checking QA is reachable and serving"
+          serving=0
+          for i in $(seq 1 10); do
+            code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 15 "${QA_URL}/web/login" || echo 000)
+            echo "attempt $i: HTTP $code"
+            # An explicit if, not `A || B && break`: under `set -e` that
+            # compound returns non-zero on no match and aborts the step.
+            if [ "$code" = "200" ] || [ "$code" = "303" ]; then
+              serving=1
+              break
+            fi
+            sleep 10
+          done
+          [ "$serving" = "1" ] || { echo "QA is not serving"; exit 1; }
+
+          # The database manager must be unreachable in QA, exactly as in
+          # production. If this ever returns 200, QA is misconfigured and is
+          # no longer a faithful rehearsal.
+          dbcode=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 15 "${QA_URL}/web/database/manager" || echo 000)
+          echo "database manager returned HTTP $dbcode (expected 404/403)"
+          case "$dbcode" in
+            200) echo "SECURITY: the database manager is exposed in QA"; exit 1 ;;
+          esac
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### QA deployment"
+            echo ""
+            echo "- tag: \`${{ inputs.image_tag }}\` (same image as DEV, not rebuilt)"
+            echo "- integration tests: ${{ inputs.skip_integration_tests && 'SKIPPED' || 'run' }}"
+            echo "- result: ${{ job.status }}"
+            echo ""
+            if [ "${{ job.status }}" = "success" ]; then
+              echo "Ready for production approval: run **Deploy PROD** with this exact tag."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

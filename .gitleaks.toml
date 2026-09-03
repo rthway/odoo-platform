@@ -1,0 +1,48 @@
+# ===========================================================================
+# Gitleaks configuration
+# ===========================================================================
+# Extends the upstream default ruleset rather than replacing it: replacing it
+# is how teams accidentally stop detecting AWS keys.
+# ===========================================================================
+title = "odoo-platform"
+
+[extend]
+useDefault = true
+
+# --- Project-specific rules ------------------------------------------------
+
+[[rules]]
+id = "odoo-admin-passwd"
+description = "Odoo master password assigned a literal value"
+regex = '''(?i)(admin_passwd|ODOO_ADMIN_PASSWD)\s*[:=]\s*['\"]?[A-Za-z0-9!@#$%^&*_+-]{8,}['\"]?'''
+tags = ["odoo", "password"]
+
+[[rules]]
+id = "postgres-password-literal"
+description = "PostgreSQL password assigned a literal value"
+regex = '''(?i)(POSTGRES_PASSWORD|PGPASSWORD|db_password)\s*[:=]\s*['\"]?[A-Za-z0-9!@#$%^&*_+-]{8,}['\"]?'''
+tags = ["postgres", "password"]
+
+[allowlist]
+description = "Placeholders, templates and documented examples"
+
+paths = [
+  # *.example files are the documented placeholder set. They are checked by
+  # tests/test-security.sh instead, which asserts the values stay EMPTY.
+  '''\.env\.example$''',
+  '''\.env\.[a-z]+\.example$''',
+  # The odoo.conf template contains ${PLACEHOLDER}, not values.
+  '''config/odoo/odoo\.conf\.tmpl$''',
+  '''infrastructure/ansible/inventory/hosts\.example\.ini$''',
+  '''\.gitleaks\.toml$''',
+]
+
+regexes = [
+  # Shell variable references and envsubst placeholders are not secrets.
+  '''\$\{[A-Za-z_][A-Za-z0-9_]*\}''',
+  '''\$[A-Za-z_][A-Za-z0-9_]*''',
+  # Ansible template expressions.
+  '''\{\{\s*[a-z_.]+\s*\}\}''',
+  # Values CI and the docs use on purpose.
+  '''(ci-only|ci-integration-pw|ci-integration-admin|validate-only|changeme|CHANGEME|placeholder)''',
+]
