@@ -85,6 +85,41 @@ else
     pass "observability stack refuses to start without Grafana credentials"
 fi
 
+# Only Grafana may be reachable from the network on OPS, and only through
+# nginx. Prometheus and Alertmanager have NO authentication of any kind:
+# publishing them would put an unauthenticated metrics store and an
+# alert-silencing API on the network.
+if "${PYTHON}" - "${TMP}/resolved-ops.yml" <<'PY'
+import sys, yaml
+
+cfg = yaml.safe_load(open(sys.argv[1]))
+failures = []
+
+for name in ("prometheus", "alertmanager"):
+    for port in cfg["services"][name].get("ports", []):
+        if port.get("host_ip") not in ("127.0.0.1", "::1"):
+            failures.append(f"{name} publishes {port.get('published')} on {port.get('host_ip')!r}, expected 127.0.0.1")
+
+# Grafana itself must not be published beyond localhost either - nginx is the
+# only front door, so that TLS and rate limiting cannot be bypassed.
+for port in cfg["services"]["grafana"].get("ports", []):
+    if port.get("host_ip") not in ("127.0.0.1", "::1"):
+        failures.append(f"grafana publishes {port.get('published')} on {port.get('host_ip')!r} directly, bypassing nginx")
+
+proxy_ports = sorted(str(p.get("published")) for p in cfg["services"]["proxy"].get("ports", []))
+if proxy_ports != ["443", "80"]:
+    failures.append(f"the OPS proxy publishes {proxy_ports}, expected 80 and 443")
+
+for f in failures:
+    print(f"    {f}")
+sys.exit(1 if failures else 0)
+PY
+then
+    pass "on OPS only nginx faces the network; Prometheus and Alertmanager stay local"
+else
+    fail "OPS exposes a service that must not face the network"
+fi
+
 # Monitoring endpoints must stay bound to localhost by default.
 if grep -qE '^MONITORING_BIND=127\.0\.0\.1' .env.ops.example; then
     pass "monitoring endpoints bind to localhost by default"

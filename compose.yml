@@ -106,13 +106,13 @@ services:
     ports:
       # Bound to BIND_ADDRESS, 127.0.0.1 by default, so a stack cannot be
       # published to the internet by accident. Overlays widen it explicitly.
-      - "${BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-8080}:80"
-      - "${BIND_ADDRESS:-127.0.0.1}:${HTTPS_PORT:-8443}:443"
+      - "${BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-80}:80"
+      - "${BIND_ADDRESS:-127.0.0.1}:${HTTPS_PORT:-443}:443"
     environment:
       ODOO_DOMAIN: ${ODOO_DOMAIN:-localhost}
       # Public HTTPS port, used by the HTTP->HTTPS redirect. Empty when it is
       # 443, so production redirects to a clean https://host/ URL.
-      HTTPS_PUBLIC_PORT: "${HTTPS_PUBLIC_PORT-:8443}"
+      HTTPS_PUBLIC_PORT: "${HTTPS_PUBLIC_PORT-}"
       # CRITICAL: without this filter nginx's entrypoint would substitute
       # EVERY $variable in the template, blanking $host, $remote_addr and
       # $proxy_add_x_forwarded_for and silently breaking proxying and TLS.

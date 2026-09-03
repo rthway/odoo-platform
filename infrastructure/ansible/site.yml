@@ -215,6 +215,26 @@
         group: "{{ deploy_user }}"
         mode: "0755"
 
+    # nginx terminates TLS for Grafana and will not start without a
+    # certificate, exactly as on the application hosts.
+    - name: Ensure the OPS TLS directory exists
+      ansible.builtin.file:
+        path: "{{ app_dir }}/config/nginx/tls"
+        state: directory
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: "0750"
+
+    - name: Generate a self-signed certificate for Grafana when none exists
+      become: true
+      become_user: "{{ deploy_user }}"
+      ansible.builtin.command:
+        cmd: >-
+          ./scripts/gen-local-tls.sh -d {{ grafana_domain | default(ansible_host) }}
+        chdir: "{{ app_dir }}"
+        creates: "{{ app_dir }}/config/nginx/tls/fullchain.pem"
+      when: not ansible_check_mode
+
     - name: Start the observability stack
       become: true
       become_user: "{{ deploy_user }}"

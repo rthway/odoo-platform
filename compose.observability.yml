@@ -122,6 +122,8 @@ services:
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     ports:
+      # Still published on localhost for an SSH tunnel and for local
+      # diagnostics, but nginx below is the way in from a browser.
       - "${MONITORING_BIND:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/api/health || exit 1"]
@@ -184,11 +186,50 @@ services:
     networks: [observability]
     logging: *default-logging
 
+  # -----------------------------------------------------------------------
+  # TLS front end for Grafana on 80/443.
+  #
+  # GRAFANA ONLY. Prometheus and Alertmanager stay bound to localhost and are
+  # reached over an SSH tunnel: Grafana has real authentication - an admin
+  # account, with sign-up and anonymous access disabled - and they have none
+  # whatsoever. Publishing them here would put an unauthenticated metrics
+  # store and an alert-silencing API on the network.
+  # -----------------------------------------------------------------------
+  proxy:
+    image: nginx:${NGINX_VERSION:-1.31.4-alpine3.24}
+    restart: always
+    depends_on: [grafana]
+    ports:
+      - "${OPS_BIND:-0.0.0.0}:${OPS_HTTP_PORT:-80}:80"
+      - "${OPS_BIND:-0.0.0.0}:${OPS_HTTPS_PORT:-443}:443"
+    environment:
+      GRAFANA_DOMAIN: ${GRAFANA_DOMAIN:-localhost}
+      # Same trap as the application stack: without the filter nginx's
+      # entrypoint substitutes every $$variable in the template, blanking
+      # $$host and $$proxy_add_x_forwarded_for.
+      NGINX_ENVSUBST_FILTER: "^GRAFANA_DOMAIN$$"
+    volumes:
+      - ./config/nginx/ops/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/nginx/snippets:/etc/nginx/snippets:ro
+      - ./config/nginx/ops/conf.d:/etc/nginx/templates:ro
+      - ./config/nginx/tls:/etc/nginx/tls:ro
+      - ./config/nginx/default.conf.disabled:/etc/nginx/conf.d/default.conf:ro
+      - certbot-webroot:/var/www/certbot
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null --no-check-certificate https://127.0.0.1/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks: [observability]
+    logging: *default-logging
+
 networks:
   observability:
     driver: bridge
 
 volumes:
+  certbot-webroot:
   prometheus-data:
   alertmanager-data:
   loki-data:
