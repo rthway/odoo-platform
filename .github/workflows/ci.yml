@@ -43,10 +43,18 @@ jobs:
 
       - name: Check scripts are executable
         run: |
+          # Check the mode recorded in git, not the filesystem bit. A
+          # contributor on Windows has core.filemode=false, so chmod +x is
+          # never recorded and every script arrives here as 100644 and fails
+          # with exit 126.
           fail=0
-          for f in scripts/*.sh docker/odoo/*.sh tests/*.sh; do
-            if [ ! -x "$f" ]; then echo "not executable: $f"; fail=1; fi
-          done
+          while read -r mode _ _ path; do
+            if [ "$mode" != "100755" ]; then
+              echo "not executable in git ($mode): $path"
+              echo "  fix with: git update-index --chmod=+x $path"
+              fail=1
+            fi
+          done < <(git ls-files -s 'scripts/*.sh' 'tests/*.sh' 'docker/odoo/*.sh')
           exit $fail
 
       - name: Lint YAML
@@ -222,7 +230,7 @@ jobs:
             VCS_REF=${{ github.sha }}
             VERSION=ci
 
-      - name: Start the stack
+      - name: Write the CI environment file
         run: |
           set -euo pipefail
           cp .env.dev.example .env
@@ -232,17 +240,24 @@ jobs:
             -e 's|^ODOO_IMAGE=.*|ODOO_IMAGE=odoo-platform|' \
             -e 's/^ODOO_IMAGE_TAG=$/ODOO_IMAGE_TAG=ci/' \
             .env
-          docker compose -f compose.yml -f compose.dev.yml up -d
+
+      - name: Start PostgreSQL only
+        run: |
+          # The database must exist and be initialised BEFORE Odoo serves.
+          # Starting the whole stack first lets Odoo auto-initialise the
+          # registry, and the explicit --init=base then fails with a duplicate
+          # key on base_registry_signaling.
+          docker compose -f compose.yml -f compose.dev.yml up -d --wait db
 
       - name: Initialise the Odoo database
         run: |
-          # A fresh database has no schema. Install base so the smoke tests
-          # exercise a real, initialised Odoo rather than an empty shell.
-          docker compose -f compose.yml -f compose.dev.yml exec -T odoo \
+          # A one-off container: --stop-after-init means it initialises and
+          # exits rather than staying up and accepting traffic.
+          docker compose -f compose.yml -f compose.dev.yml run --rm --no-deps -T odoo \
             odoo --config=/etc/odoo/odoo.conf --database=odoo_dev \
                  --init=base --stop-after-init --no-http
 
-      - name: Restart and health check
+      - name: Start the full stack and health check
         run: |
           docker compose -f compose.yml -f compose.dev.yml up -d
           ./scripts/healthcheck.sh -e dev -t 300

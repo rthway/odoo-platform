@@ -28,14 +28,19 @@ done
 (( syntax_bad == 0 )) && pass "every shell script parses"
 
 # --- Executable bits -------------------------------------------------------
+# Check the mode RECORDED IN GIT, not the filesystem bit. On Windows,
+# core.filemode is false and Git Bash reports every file as executable, so a
+# `[[ -x ]]` test passes locally while the committed mode stays 100644 and
+# every script fails on a Linux runner with exit 126.
 notexec=""
-for f in scripts/*.sh tests/*.sh docker/odoo/*.sh; do
-    [[ -x "${f}" ]] || notexec="${notexec} ${f}"
-done
+while read -r mode _ _ path; do
+    [[ "${mode}" == "100755" ]] || notexec="${notexec} ${path}"
+done < <(git ls-files -s 'scripts/*.sh' 'tests/*.sh' 'docker/odoo/*.sh')
+
 if [[ -n "${notexec}" ]]; then
-    fail "not executable:${notexec}"
+    fail "not executable in git (fix: git update-index --chmod=+x <file>):${notexec}"
 else
-    pass "every shell script is executable"
+    pass "every shell script is mode 100755 in git"
 fi
 
 # --- Shebangs --------------------------------------------------------------
