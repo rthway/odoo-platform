@@ -230,6 +230,13 @@ jobs:
             VCS_REF=${{ github.sha }}
             VERSION=ci
 
+      - name: Generate a self-signed certificate
+        run: |
+          # nginx terminates TLS and will not start without a certificate, so
+          # the stack cannot come up in CI (or on a fresh clone) until one
+          # exists. Self-signed is correct here; production uses Let's Encrypt.
+          ./scripts/gen-local-tls.sh -d localhost
+
       - name: Write the CI environment file
         run: |
           set -euo pipefail

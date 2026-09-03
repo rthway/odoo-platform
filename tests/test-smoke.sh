@@ -32,7 +32,8 @@ if [[ -r .env ]]; then
     . .env
     set +a
 fi
-BASE_URL="${BASE_URL:-http://127.0.0.1:${HTTP_PORT:-8080}}"
+# HTTPS by default; HTTP only ever returns the redirect.
+BASE_URL="${BASE_URL:-https://127.0.0.1:${HTTPS_PORT:-8443}}"
 
 PASS=0
 FAIL=0

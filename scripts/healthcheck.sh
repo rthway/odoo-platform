@@ -64,8 +64,10 @@ if [[ -r "${COMPOSE_DIR}/.env" ]]; then
     set -a; . "${COMPOSE_DIR}/.env"; set +a
 fi
 
+# HTTPS by default: the nginx vhost redirects all HTTP to HTTPS, so probing
+# the HTTP port only ever measures the redirect, not the application.
 if [[ -z "${BASE_URL}" ]]; then
-    BASE_URL="http://127.0.0.1:${HTTP_PORT:-8080}"
+    BASE_URL="https://127.0.0.1:${HTTPS_PORT:-8443}"
 fi
 
 printf '=== Health check: environment=%s url=%s timeout=%ss ===\n' \
@@ -127,10 +129,18 @@ fi
 # 4/5/6. HTTP, waiting up to TIMEOUT for Odoo to finish starting
 # ---------------------------------------------------------------------------
 head_ "HTTP"
+# -k because DEV and QA legitimately run self-signed certificates.
+#
+# The status code is compared explicitly rather than relying on `curl -f`:
+# -f only fails on 4xx and 5xx, so the 301 that nginx returns when HTTP is
+# redirected to HTTPS would count as success and a redirect would be reported
+# as a healthy application.
 deadline=$(( SECONDS + TIMEOUT ))
 http_ok=0
+last_code=000
 while (( SECONDS < deadline )); do
-    if curl -fsS -o /dev/null --max-time 10 "${BASE_URL}/web/health"; then
+    last_code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 "${BASE_URL}/web/health" || echo 000)"
+    if [[ "${last_code}" == "200" ]]; then
         http_ok=1
         break
     fi
@@ -138,14 +148,14 @@ while (( SECONDS < deadline )); do
 done
 
 if (( http_ok == 1 )); then
-    pass "/web/health responded (after $(( TIMEOUT - (deadline - SECONDS) ))s)"
+    pass "/web/health returned 200"
 else
-    fail "/web/health did not respond within ${TIMEOUT}s"
+    fail "/web/health returned ${last_code} (not 200) within ${TIMEOUT}s"
 fi
 
 # A real application request. /web/health can be served before the ORM is
 # ready; the login page rendering means Odoo actually loaded the registry.
-code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "${BASE_URL}/web/login" || echo 000)"
+code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 20 "${BASE_URL}/web/login" || echo 000)"
 if [[ "${code}" =~ ^(200|303)$ ]]; then
     pass "/web/login returned HTTP ${code} - application registry is loaded"
 else
@@ -153,7 +163,7 @@ else
 fi
 
 # Response time, recorded so a slow-but-up deployment is still visible.
-rt="$(curl -s -o /dev/null -w '%{time_total}' --max-time 20 "${BASE_URL}/web/login" || echo '?')"
+rt="$(curl -sk -o /dev/null -w '%{time_total}' --max-time 20 "${BASE_URL}/web/login" || echo '?')"
 pass "login page response time: ${rt}s"
 
 # ---------------------------------------------------------------------------
