@@ -28,6 +28,9 @@ CADVISOR_VERSION={{ cadvisor_version | default('v0.52.1') }}
 {# 127.0.0.1 deliberately: none of these services has authentication strong
    enough to face the internet. They are reached over an SSH tunnel. #}
 MONITORING_BIND={{ monitoring_bind | default('127.0.0.1') }}
+{# Loki takes pushes from the application hosts, so unlike the dashboards it
+   cannot bind to localhost. Defaults to this host's internal address. #}
+LOKI_BIND={{ loki_bind | default(internal_ip | default('127.0.0.1')) }}
 PROMETHEUS_PORT={{ prometheus_port | default(9090) }}
 ALERTMANAGER_PORT={{ alertmanager_port | default(9093) }}
 LOKI_PORT={{ loki_port | default(3100) }}

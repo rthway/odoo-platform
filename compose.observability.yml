@@ -83,7 +83,12 @@ services:
       - ./monitoring/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
       - loki-data:/loki
     ports:
-      - "${MONITORING_BIND:-127.0.0.1}:${LOKI_PORT:-3100}:3100"
+      # Loki is the ONE service here that is not purely human-facing: promtail
+      # on DEV, QA and PROD pushes to it, so binding it to 127.0.0.1 like the
+      # dashboards makes log shipping fail with "context deadline exceeded".
+      # It binds to the internal interface instead, and ufw restricts 3100 to
+      # the application hosts.
+      - "${LOKI_BIND:-127.0.0.1}:${LOKI_PORT:-3100}:3100"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3100/ready"]
       interval: 30s

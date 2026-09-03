@@ -197,6 +197,19 @@
       loop: ["9100", "9187", "8081"]
       when: "'app' in group_names"
 
+    # Loki accepts log pushes from the application hosts. Restricted to
+    # exactly those addresses: an open 3100 lets anyone write arbitrary logs
+    # into the system used to investigate incidents.
+    - name: Allow the application hosts to push logs to Loki
+      community.general.ufw:
+        rule: allow
+        port: "3100"
+        proto: tcp
+        src: "{{ item }}"
+        comment: "Loki push from application hosts"
+      loop: "{{ app_host_ips }}"
+      when: "'ops' in group_names"
+
     - name: Deny all other inbound traffic
       community.general.ufw:
         direction: incoming

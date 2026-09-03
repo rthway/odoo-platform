@@ -16,3 +16,11 @@ common_permit_root_login: "prohibit-password"
 # TCP forwarding is how an operator tunnels to Grafana or Prometheus, which
 # are bound to localhost on OPS. Off elsewhere.
 common_allow_tcp_forwarding: false
+
+# Internal addresses of the application hosts, used for the Loki ingress rule
+# on OPS. Kept as an explicit list rather than derived from the inventory so
+# the firewall does not silently widen when a host is added to a group.
+app_host_ips:
+  - 192.168.2.6      # dev
+  - 192.168.2.52     # qa
+  - 192.168.2.217    # prod
