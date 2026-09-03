@@ -103,9 +103,11 @@ jobs:
         working-directory: infrastructure/ansible
         run: |
           ansible-inventory --list --yaml --limit "$ANSIBLE_LIMIT" | head -40
-          ansible "$ANSIBLE_LIMIT" -m ping \
-            --private-key ~/.ssh/id_deploy \
-            -o StrictHostKeyChecking=yes || true
+          # `-o` on ansible means --one-line, not an ssh option; passing
+          # StrictHostKeyChecking here made it exit with "unrecognized
+          # arguments". Host key checking is already on via ansible.cfg and
+          # the pinned known_hosts written above.
+          ansible "$ANSIBLE_LIMIT" -m ping --private-key ~/.ssh/id_deploy || true
 
       - name: Run the playbook
         working-directory: infrastructure/ansible
