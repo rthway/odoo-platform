@@ -117,7 +117,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Scan the filesystem
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -141,7 +141,7 @@ jobs:
       #   HIGH     -> block when a fix is available
       #   MEDIUM   -> report only
       - name: Enforce the vulnerability policy
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
