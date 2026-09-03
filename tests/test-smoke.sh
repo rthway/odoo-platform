@@ -151,12 +151,21 @@ done
 # hours ago, so the check fails on problems that are already fixed. That is
 # exactly what happened on the first DEV deployment - the pre-initialisation
 # tracebacks kept failing the smoke test long after the database was fixed.
+#
+# Match on Odoo's LOG LEVEL, not on the word "Traceback". Odoo logs handled
+# exceptions with a full traceback at DEBUG - a browser presenting a stale
+# session cookie produces one every request - so counting the word reports
+# failures for behaviour that is working exactly as intended. DEV runs at
+# debug level, so it saw 22 of these from a single visitor.
+#
+# Odoo's format is: <timestamp> <pid> <LEVEL> <db> <logger>: <message>
 LOG_WINDOW="${SMOKE_LOG_WINDOW:-5m}"
-errors="$(compose logs --since "${LOG_WINDOW}" odoo 2>/dev/null | grep -icE 'CRITICAL|Traceback' || true)"
+errors="$(compose logs --since "${LOG_WINDOW}" odoo 2>/dev/null     | grep -cE '[0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3} [0-9]+ (CRITICAL|ERROR) ' || true)"
 if [[ "${errors}" == "0" ]]; then
-    pass "no CRITICAL entries or tracebacks in the last ${LOG_WINDOW}"
+    pass "no ERROR or CRITICAL entries in the last ${LOG_WINDOW}"
 else
-    fail "${errors} CRITICAL/traceback line(s) in the last ${LOG_WINDOW} of Odoo logs"
+    fail "${errors} ERROR/CRITICAL line(s) in the last ${LOG_WINDOW} of Odoo logs"
+    compose logs --since "${LOG_WINDOW}" odoo 2>/dev/null         | grep -E '[0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3} [0-9]+ (CRITICAL|ERROR) '         | tail -3 | sed 's/^/          /'
 fi
 
 # ---------------------------------------------------------------------------
