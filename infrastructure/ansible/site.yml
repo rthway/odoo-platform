@@ -194,6 +194,18 @@
   tags: [verify]
 
   tasks:
+    # The deploy user was added to the `docker` group earlier in this run, but
+    # ansible.cfg keeps the SSH connection alive with ControlPersist, so the
+    # existing session still carries the OLD group membership and `docker ps`
+    # fails with "permission denied ... /var/run/docker.sock". Dropping the
+    # connection forces a fresh login that picks the new group up.
+    #
+    # This is only a first-run problem - on later runs the user is already in
+    # the group - which makes it exactly the kind of thing that works when
+    # tested and fails on a clean host.
+    - name: Reset the connection so new group membership takes effect
+      ansible.builtin.meta: reset_connection
+
     # One guarded block, not a play-level `when` - that is not a valid play
     # attribute and Ansible refuses to parse the playbook at all.
     #
