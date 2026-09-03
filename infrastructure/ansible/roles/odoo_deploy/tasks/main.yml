@@ -107,7 +107,7 @@
 - name: Generate a self-signed certificate when none exists
   when:
     - not tls_cert.stat.exists
-    - env_name != "prod"
+    - env_name != "prod" or prod_allow_self_signed | bool
     # openssl would write real files during what is meant to be a dry run.
     - not ansible_check_mode
   ansible.builtin.command:
@@ -126,8 +126,27 @@
     fail_msg: >-
       No TLS certificate at {{ app_dir }}/config/nginx/tls/fullchain.pem.
       Production must not run on a self-signed certificate. Obtain one with
-      certbot first - see docs/security.md.
-  when: env_name == "prod"
+      certbot first - see docs/security.md. To proceed anyway, temporarily,
+      while no DNS name exists, set prod_allow_self_signed=true.
+  when:
+    - env_name == "prod"
+    - not (prod_allow_self_signed | bool)
+  tags: [tls]
+
+# Loud on EVERY run, not just the first, so a temporary decision does not
+# quietly become the permanent state of production.
+- name: Warn that production is running on a self-signed certificate
+  ansible.builtin.debug:
+    msg: >-
+      *** {{ inventory_hostname }} is PRODUCTION and is using a SELF-SIGNED
+      certificate. Every user will see a browser security warning, and
+      clicking through those is the habit phishing depends on. Replace it
+      with a real certificate as soon as a DNS name exists -
+      docs/runbook.md#renew-ssl. Then set prod_allow_self_signed back to
+      false so this guard is live again.
+  when:
+    - env_name == "prod"
+    - prod_allow_self_signed | bool
   tags: [tls]
 
 # ---------------------------------------------------------------------------

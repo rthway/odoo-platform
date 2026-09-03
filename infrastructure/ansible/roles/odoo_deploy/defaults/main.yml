@@ -9,3 +9,11 @@ odoo_domain: localhost
 # default password is a password everyone has; these must come from
 # GitHub Environment Secrets or an Ansible Vault file, and the template
 # below fails the run if they are missing.
+
+# Production normally REFUSES to configure without a real certificate: a
+# self-signed one in production trains users to click through browser
+# warnings, which is the behaviour phishing relies on.
+#
+# Set true only as a deliberate, temporary step while no DNS name exists yet.
+# It is loud on every run precisely so it does not become permanent.
+prod_allow_self_signed: false
