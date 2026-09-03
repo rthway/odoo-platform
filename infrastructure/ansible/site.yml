@@ -166,14 +166,38 @@
     # be rendered with real values before the container starts. Mounting the
     # committed file directly made it crash-loop on "${SMTP_SMARTHOST}:
     # missing port in address".
+    # If compose ever starts before the render, Docker creates the missing
+    # bind-mount source as a DIRECTORY, and every later render then fails
+    # because the destination is not a file. Cheap to prevent, confusing to
+    # diagnose from the resulting error.
+    - name: Check what is at the Alertmanager config path
+      ansible.builtin.stat:
+        path: "{{ app_dir }}/monitoring/alertmanager/alertmanager.generated.yml"
+      register: am_config_path
+      when: not ansible_check_mode
+
+    - name: Remove a directory Docker left where that config belongs
+      ansible.builtin.file:
+        path: "{{ app_dir }}/monitoring/alertmanager/alertmanager.generated.yml"
+        state: absent
+      when:
+        - not ansible_check_mode
+        - am_config_path.stat.isdir | default(false)
+
     - name: Render the Alertmanager configuration
       ansible.builtin.template:
-        src: "{{ app_dir }}/monitoring/alertmanager/alertmanager.yml.j2"
+        # src resolves on the CONTROLLER, not the remote host, so it is a
+        # path relative to this playbook - not {{ app_dir }}, which only
+        # exists on the target.
+        src: ../../monitoring/alertmanager/alertmanager.yml.j2
         dest: "{{ app_dir }}/monitoring/alertmanager/alertmanager.generated.yml"
         owner: "{{ deploy_user }}"
         group: "{{ deploy_user }}"
         mode: "0640"
-      no_log: true
+      # Deliberately NOT no_log. The rendered file holds secrets, but the
+      # module's own error messages are paths and syntax - and a censored
+      # failure ("output has been hidden") gives an operator nothing to act
+      # on, which cost a full round trip to diagnose here.
       when: not ansible_check_mode
 
     - name: Create the node_exporter textfile collector directory on OPS
