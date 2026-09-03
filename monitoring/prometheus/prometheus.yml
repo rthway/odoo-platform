@@ -103,13 +103,15 @@ scrape_configs:
   - job_name: blackbox-odoo
     metrics_path: /probe
     params:
-      module: [odoo_http]
+      # HTTPS, not HTTP: every environment serves on 443 and port 80 only
+      # returns a 301, which the module would score as a failure.
+      module: [odoo_https]
     static_configs:
-      - targets: ["http://192.168.2.6:8080/web/health"]
+      - targets: ["https://192.168.2.6/web/health"]
         labels: {environment: dev, instance_name: dev-223, service: odoo}
-      - targets: ["http://192.168.2.52:8080/web/health"]
+      - targets: ["https://192.168.2.52/web/health"]
         labels: {environment: qa, instance_name: qa-230, service: odoo}
-      - targets: ["http://192.168.2.217/web/health"]
+      - targets: ["https://192.168.2.217/web/health"]
         labels: {environment: prod, instance_name: prod-231, service: odoo}
     relabel_configs:
       # The standard blackbox indirection: the target becomes a parameter to
@@ -130,8 +132,14 @@ scrape_configs:
     params:
       module: [tls_connect]
     static_configs:
-      - targets: []
-        labels: {environment: prod, service: tls}
+      - targets: ["192.168.2.6:443"]
+        labels: {environment: dev, instance_name: dev-223, service: tls}
+      - targets: ["192.168.2.52:443"]
+        labels: {environment: qa, instance_name: qa-230, service: tls}
+      - targets: ["192.168.2.217:443"]
+        labels: {environment: prod, instance_name: prod-231, service: tls}
+      - targets: ["192.168.2.56:443"]
+        labels: {environment: ops, instance_name: ops-232, service: tls}
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target

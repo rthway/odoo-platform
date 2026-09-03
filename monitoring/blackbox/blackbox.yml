@@ -32,8 +32,28 @@ modules:
       fail_if_body_not_matches_regexp:
         - "(?i)(odoo|csrf_token|<form)"
 
-  # HTTPS with certificate validation - production ingress.
+  # HTTPS, the way Odoo is actually served now that every environment runs on
+  # 80/443. Probing port 80 would only ever measure the redirect: the vhost
+  # returns 301, and this module requires 200.
+  #
+  # insecure_skip_verify is on because DEV and QA use self-signed certificates
+  # by design. That is NOT a hole in certificate monitoring - the separate
+  # blackbox-tls job reports probe_ssl_earliest_cert_expiry, which is what the
+  # certificate-expiry alerts fire on.
   odoo_https:
+    prober: http
+    timeout: 15s
+    http:
+      valid_status_codes: [200]
+      method: GET
+      preferred_ip_protocol: ip4
+      follow_redirects: false
+      fail_if_not_ssl: true
+      tls_config:
+        insecure_skip_verify: true
+
+  # Strict variant, for once production has a real certificate.
+  odoo_https_strict:
     prober: http
     timeout: 15s
     http:
