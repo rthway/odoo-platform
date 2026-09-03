@@ -31,8 +31,14 @@
     # "Python 3.6.9" -> "6", "Python 3.12.3" -> "12". A host with no python3
     # at all prints nothing, so fall back to -1 and let the assertion report
     # it rather than failing on an empty string. Templated lazily, per host.
+    #
+    # regex_findall, not regex_search: findall returns [] when nothing
+    # matches, whereas regex_search with a backref raises
+    # "'NoneType' object has no attribute 'group'" on the ansible-core the
+    # runner installs - which turned "this host has no usable python" into a
+    # filter crash naming neither the host nor the reason.
     remote_python_minor: >-
-      {{ remote_python.stdout | default('') | regex_search('Python 3\.(\d+)', '\\1') | default(['-1'], true) | first }}
+      {{ remote_python.stdout | default('') | regex_findall('Python 3\.(\d+)') | default(['-1'], true) | first }}
 
   tasks:
     # raw, not ping: ping is a Python module, so on an unsupported
@@ -44,6 +50,12 @@
       ansible.builtin.raw: "{{ ansible_python_interpreter | default('/usr/bin/python3') }} -V"
       register: remote_python
       changed_when: false
+      # raw implements no check mode, so under --check Ansible skips it and
+      # the assertion below reads an undefined stdout. Reading a version
+      # number changes nothing, so it is safe - and necessary - to run even
+      # in check mode: the workflow defaults to --check, so without this the
+      # guard was absent from the mode that runs most often.
+      check_mode: false
 
     - name: Require a Python 3 new enough to run Ansible modules
       ansible.builtin.assert:
