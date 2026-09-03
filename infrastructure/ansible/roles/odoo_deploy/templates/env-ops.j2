@@ -1,0 +1,61 @@
+# ===========================================================================
+# RENDERED BY ANSIBLE - DO NOT EDIT ON THE SERVER
+# ===========================================================================
+# Environment file for compose.observability.yml on the OPS host.
+#
+# Separate from env.j2 because the two stacks need different variables: the
+# application file carries database and Odoo settings, this one carries
+# Grafana credentials and alert routing. Rendering the application template
+# here produced a file with no GRAFANA_ADMIN_* values, and the stack then
+# refused to start - correctly, but for a reason that looked like a bug.
+#
+# Host: {{ inventory_hostname }}
+# ===========================================================================
+
+COMPOSE_PROJECT_NAME=odoo-observability
+ENVIRONMENT=ops
+
+# --- Pinned versions ------------------------------------------------------
+PROMETHEUS_VERSION={{ prometheus_version | default('v3.1.0') }}
+ALERTMANAGER_VERSION={{ alertmanager_version | default('v0.28.0') }}
+LOKI_VERSION={{ loki_version | default('3.3.2') }}
+GRAFANA_VERSION={{ grafana_version | default('11.5.1') }}
+BLACKBOX_VERSION={{ blackbox_version | default('v0.26.0') }}
+NODE_EXPORTER_VERSION={{ node_exporter_version | default('v1.8.2') }}
+CADVISOR_VERSION={{ cadvisor_version | default('v0.52.1') }}
+
+# --- Binding --------------------------------------------------------------
+{# 127.0.0.1 deliberately: none of these services has authentication strong
+   enough to face the internet. They are reached over an SSH tunnel. #}
+MONITORING_BIND={{ monitoring_bind | default('127.0.0.1') }}
+PROMETHEUS_PORT={{ prometheus_port | default(9090) }}
+ALERTMANAGER_PORT={{ alertmanager_port | default(9093) }}
+LOKI_PORT={{ loki_port | default(3100) }}
+GRAFANA_PORT={{ grafana_port | default(3000) }}
+
+PROMETHEUS_RETENTION={{ prometheus_retention | default('30d') }}
+
+# --- Grafana --------------------------------------------------------------
+{# Required. compose.observability.yml uses `:?` so the stack fails loudly
+   rather than starting with a default administrator password. #}
+GRAFANA_ADMIN_USER={{ grafana_admin_user }}
+GRAFANA_ADMIN_PASSWORD={{ grafana_admin_password }}
+GRAFANA_ROOT_URL={{ grafana_root_url | default('http://localhost:3000') }}
+PROMETHEUS_EXTERNAL_URL={{ prometheus_external_url | default('http://localhost:9090') }}
+ALERTMANAGER_EXTERNAL_URL={{ alertmanager_external_url | default('http://localhost:9093') }}
+
+# --- Alert delivery -------------------------------------------------------
+{# Empty values are tolerated: Alertmanager starts and queues, and the
+   AlertmanagerUnreachable rule still reports if the stack itself is down. #}
+SMTP_SMARTHOST={{ smtp_smarthost | default('') }}
+SMTP_FROM={{ smtp_from | default('') }}
+ALERT_EMAIL_TO={{ alert_email_to | default('') }}
+ALERT_EMAIL_CRITICAL={{ alert_email_critical | default('') }}
+ALERT_SLACK_WEBHOOK_URL={{ alert_slack_webhook_url | default('') }}
+ALERT_SLACK_CHANNEL={{ alert_slack_channel | default('') }}
+ALERT_SLACK_CHANNEL_CRITICAL={{ alert_slack_channel_critical | default('') }}
+ALERT_SLACK_CHANNEL_LOW={{ alert_slack_channel_low | default('') }}
+
+# --- Backups --------------------------------------------------------------
+BACKUP_DIR={{ backup_dir }}
+NODE_EXPORTER_TEXTFILE_DIR=/var/lib/node_exporter/textfile_collector

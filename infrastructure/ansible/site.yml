@@ -40,6 +40,47 @@
           {{ inventory_hostname }} runs {{ ansible_distribution }}, which these
           roles do not support. They assume apt and Docker's Debian packages.
 
+    # Fail here, before anything is configured, rather than half-way through
+    # when odoo_deploy tries to render .env. A host left partly configured is
+    # worse than one never touched, because nobody knows which state it is in.
+    - name: Require the secrets the application hosts need
+      ansible.builtin.assert:
+        that:
+          - postgres_password is defined
+          - postgres_password | length >= 16
+          - odoo_admin_passwd is defined
+          - odoo_admin_passwd | length >= 16
+        fail_msg: >-
+          postgres_password and odoo_admin_passwd must be supplied (16+ chars)
+          for {{ inventory_hostname }}. They have no defaults on purpose - a
+          default password is a password everyone already has. Provide them
+          via group_vars/{{ env_name }}/vault.yml and run with
+          --ask-vault-pass. Generate values with scripts/gen-secrets.sh.
+        quiet: true
+      when: "'app' in group_names"
+
+    - name: Require Grafana credentials on the monitoring host
+      ansible.builtin.assert:
+        that:
+          - grafana_admin_user is defined
+          - grafana_admin_password is defined
+          - grafana_admin_password | length >= 16
+        fail_msg: >-
+          grafana_admin_user and grafana_admin_password must be supplied for
+          {{ inventory_hostname }}. The observability stack refuses to start
+          without them rather than defaulting to admin/admin.
+        quiet: true
+      when: "'ops' in group_names"
+
+    # Sudo is needed by every role that follows. Checking it here turns a
+    # confusing mid-play permission error into one clear message.
+    - name: Confirm privilege escalation works
+      become: true
+      ansible.builtin.command: id -u
+      register: become_check
+      changed_when: false
+      failed_when: become_check.stdout | trim != "0"
+
     # A production change is worth one extra second of deliberation.
     - name: Announce production changes
       ansible.builtin.debug:
@@ -99,14 +140,24 @@
         force: true
         depth: 50
 
+    # env-ops.j2, not env.j2: the observability stack needs Grafana
+    # credentials and alert routing, not database settings.
     - name: Render the observability environment file
       ansible.builtin.template:
-        src: roles/odoo_deploy/templates/env.j2
+        src: roles/odoo_deploy/templates/env-ops.j2
         dest: "{{ app_dir }}/.env"
         owner: "{{ deploy_user }}"
         group: "{{ deploy_user }}"
         mode: "0600"
       no_log: true
+
+    - name: Create the node_exporter textfile collector directory on OPS
+      ansible.builtin.file:
+        path: /var/lib/node_exporter/textfile_collector
+        state: directory
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: "0755"
 
     - name: Start the observability stack
       become: true
