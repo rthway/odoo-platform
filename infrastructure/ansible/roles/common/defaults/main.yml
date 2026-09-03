@@ -3,7 +3,11 @@
 deploy_user: deploy
 app_dir: /opt/odoo-platform
 backup_dir: /var/backups/odoo
-monitoring_server_ip: 157.10.100.232
+# The address OPS actually SOURCES traffic from. All four hosts sit behind
+# one gateway, and `ip route get` on OPS confirms it uses 192.168.2.56 even
+# when dialling a 157.10.100.x address. A ufw rule naming the public address
+# would never match, and Prometheus would be firewalled out of every exporter.
+monitoring_server_ip: 192.168.2.56
 
 # "prohibit-password" permits key-based root login (needed while a deploy
 # account is being established). Set to "no" once that account works.

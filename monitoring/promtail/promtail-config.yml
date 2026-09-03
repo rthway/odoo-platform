@@ -20,7 +20,8 @@ positions:
   filename: /var/lib/promtail/positions.yaml
 
 clients:
-  - url: http://157.10.100.232:3100/loki/api/v1/push
+  # Internal address: OPS is 192.168.2.56 on the shared 192.168.2.0/24.
+  - url: http://192.168.2.56:3100/loki/api/v1/push
     # A short backoff loses logs during a Loki restart; this rides it out.
     backoff_config:
       min_period: 500ms
