@@ -28,6 +28,9 @@
     group: root
     mode: "0644"
   notify: Restart promtail
+  # The source lives in the repository roles/odoo_deploy clones, which check
+  # mode only simulated.
+  when: not ansible_check_mode
 
 - name: Run the exporters
   community.docker.docker_container:
