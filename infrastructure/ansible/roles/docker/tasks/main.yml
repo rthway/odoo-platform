@@ -4,6 +4,16 @@
 # ===========================================================================
 # Distribution packages lag badly and often ship without the compose v2
 # plugin, which every script here depends on.
+#
+# ON --check AGAINST A HOST THAT HAS NEVER BEEN PROVISIONED:
+# adding the repository, installing the engine and starting the service are
+# all skipped. Check mode does not add the repository, so apt has no
+# candidate for docker-ce, so nothing downstream can be evaluated either.
+# That is a property of dry-running a virgin host, not a defect here.
+#
+# A dry run is therefore most useful the SECOND time onwards - which is
+# exactly when it matters, because that is when a change is being reviewed
+# against a host that already carries state.
 # ===========================================================================
 
 - name: Install prerequisites
@@ -57,6 +67,12 @@
       - docker-compose-plugin
     state: present
     update_cache: true
+  # The repository above is skipped under --check, so apt has no candidate
+  # for docker-ce and reports "No package matching 'docker-ce'". This is the
+  # inherent limit of dry-running a virgin host: check mode cannot validate
+  # anything downstream of a package install it did not make. See the note at
+  # the top of this file.
+  when: not ansible_check_mode
 
 - name: Configure the Docker daemon
   ansible.builtin.copy:
