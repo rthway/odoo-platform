@@ -24,6 +24,30 @@ Versioning: [Semantic Versioning](https://semver.org/).
   and backup scheduling
 - Documentation: 16 documents, 7 runbooks, 8 ADRs
 
+### Verified
+
+Running the pipelines for real caught seven defects that local validation had
+missed, each fixed and re-verified:
+
+- every shell script was committed mode 100644 (Windows `core.filemode=false`),
+  failing three jobs with exit 126
+- the integration job initialised the database after Odoo had already
+  auto-initialised its registry
+- nginx could not start at all without a TLS certificate, and nothing
+  generated one
+- the health check probed HTTP, where the vhost returns a 301 that `curl -f`
+  counted as success
+- `{{.State.RestartCount}}` is not a valid docker inspect path and aborts the
+  command
+- an `A && B || C` construct in build.yml, missed locally because actionlint
+  had been run with shellcheck disabled
+- `aquasecurity/trivy-action@0.28.0` does not exist, so no Trivy scanning was
+  running at all
+
+CI, Security and Build are now green. The integration job builds the image,
+runs real Odoo against real PostgreSQL, and completes a backup and restore
+round trip: 123 tables, 12 installed modules, restored in 2 seconds.
+
 ### Known gaps
 
 - Nothing deployed — no SSH access to `.223`, `.230`, `.231` or `.232`
