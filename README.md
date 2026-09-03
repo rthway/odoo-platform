@@ -110,12 +110,20 @@ common way an Odoo deployment ends up with a publicly readable database.
 | **PROD** | `157.10.100.231` | Odoo, PostgreSQL, nginx, exporters | **80/443** |
 | **OPS** | `157.10.100.232` | Prometheus, Grafana, Loki, Alertmanager, backups | **80/443** (Grafana only) |
 
-| Service | URL |
-|---|---|
-| Odoo DEV | <https://157.10.100.223> |
-| Odoo QA | <https://157.10.100.230> |
-| Odoo PROD | <https://157.10.100.231> |
-| Grafana | <https://157.10.100.232> |
+| Service | URL | Live? |
+|---|---|---|
+| Odoo DEV | <https://157.10.100.223> | yes |
+| Odoo QA | <https://157.10.100.230> | **not provisioned** |
+| Odoo PROD | <https://157.10.100.231> | **not provisioned** |
+| Grafana | <https://157.10.100.232> | yes |
+
+The table above is the intended topology. QA and PROD are reachable over SSH
+but run nothing yet, so a browser gets a refused connection rather than a
+certificate warning. PROD is ready to provision and waits only on the
+`production` environment approval plus a Provision run with **Apply** ticked;
+QA needs its Ubuntu 18.04 image replaced first, because `ansible-core` cannot
+run against its Python 3.6. See
+[`docs/infrastructure.md`](docs/infrastructure.md#current-state).
 
 **Grafana is the only monitoring service exposed**, and only through nginx with
 TLS and a rate-limited login. Prometheus and Alertmanager stay bound to
@@ -403,6 +411,7 @@ session and the server pulls its own image.
 | Backup failed | [`docs/runbooks/backup-failed.md`](docs/runbooks/backup-failed.md) |
 | Certificate expired | [`docs/runbooks/certificate-expired.md`](docs/runbooks/certificate-expired.md) |
 | Need to restore | [`docs/runbooks/restore-database.md`](docs/runbooks/restore-database.md) |
+| QA cannot be provisioned | [`docs/runbooks/qa-os-rebuild.md`](docs/runbooks/qa-os-rebuild.md) |
 
 ---
 

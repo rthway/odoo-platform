@@ -158,6 +158,18 @@ See [`runbooks/backup-failed.md`](runbooks/backup-failed.md).
 | Alerts not delivered | `amtool config routes test`; is Alertmanager up? |
 | Dashboard empty | Is the datasource resolving? Does the metric exist in Prometheus? |
 
+## Provisioning fails before it starts
+
+| Symptom | Cause |
+|---|---|
+| `Gathering Facts` fails with `SyntaxError: future feature annotations is not defined` | The target's `/usr/bin/python3` predates 3.9. `site.yml` now catches this in pre-flight and names the host and version. Rebuild the host on a current LTS. |
+| A host refuses 80/443 but answers SSH | It has probably never been provisioned. `docker ps` and `ls /opt/odoo-platform` on the host settle it in one round trip. |
+| Provision run sits in `waiting` | The `production` environment requires a reviewer. Approve it in the Actions run, or it waits forever. |
+| Provision run succeeded but nothing is deployed | **Apply** was left unticked, so it ran `--check --diff`. A dry run changes nothing by design. |
+| `Host key verification failed` after a host was rebuilt | The pinned `SSH_KNOWN_HOSTS` secret is stale. Re-run `ssh-keyscan -H <host>` and update it. |
+
+QA specifically: [`runbooks/qa-os-rebuild.md`](runbooks/qa-os-rebuild.md).
+
 ## When to escalate
 
 - Data loss is suspected

@@ -14,13 +14,68 @@
 # ---------------------------------------------------------------------------
 - name: Pre-flight safety checks
   hosts: all_servers
-  gather_facts: true
+  # Facts are gathered explicitly below, AFTER the interpreter check, not by
+  # this play header. Ansible gathers facts by running a Python module on the
+  # target, so on a host whose python3 is too old the gather itself dies with
+  #
+  #     SyntaxError: future feature annotations is not defined
+  #
+  # before any assertion in this play can run and explain why. That is how a
+  # QA host still on Ubuntu 18.04 (Python 3.6) presented: a stack trace about
+  # a language feature, for what is really "this VM is four LTS releases old".
+  gather_facts: false
   become: false
   tags: [always]
 
+  vars:
+    # "Python 3.6.9" -> "6", "Python 3.12.3" -> "12". A host with no python3
+    # at all prints nothing, so fall back to -1 and let the assertion report
+    # it rather than failing on an empty string. Templated lazily, per host.
+    #
+    # regex_findall, not regex_search: findall returns [] when nothing
+    # matches, whereas regex_search with a backref raises
+    # "'NoneType' object has no attribute 'group'" on the ansible-core the
+    # runner installs - which turned "this host has no usable python" into a
+    # filter crash naming neither the host nor the reason.
+    remote_python_minor: >-
+      {{ remote_python.stdout | default('') | regex_findall('Python 3\.(\d+)') | default(['-1'], true) | first }}
+
   tasks:
-    - name: Confirm the host is reachable
-      ansible.builtin.ping:
+    # raw, not ping: ping is a Python module, so on an unsupported
+    # interpreter it fails exactly the way the fact gather does - which is
+    # the thing this task exists to detect. It still doubles as the
+    # reachability check, since an unreachable host is reported as
+    # UNREACHABLE here just as it was before.
+    - name: Read the remote Python 3 version without running a module
+      ansible.builtin.raw: "{{ ansible_python_interpreter | default('/usr/bin/python3') }} -V"
+      register: remote_python
+      changed_when: false
+      # raw implements no check mode, so under --check Ansible skips it and
+      # the assertion below reads an undefined stdout. Reading a version
+      # number changes nothing, so it is safe - and necessary - to run even
+      # in check mode: the workflow defaults to --check, so without this the
+      # guard was absent from the mode that runs most often.
+      check_mode: false
+
+    - name: Require a Python 3 new enough to run Ansible modules
+      ansible.builtin.assert:
+        that:
+          - remote_python_minor | int >= 9
+        fail_msg: >-
+          {{ inventory_hostname }} ({{ ansible_host }}) offers
+          "{{ remote_python.stdout | default('', true) | trim | default('no python3', true) }}".
+          ansible-core requires Python 3.9 or newer ON THE TARGET
+          (module_utils/basic.py enforces it), so nothing further can run
+          here - not even fact gathering. Ubuntu 22.04 or newer ships a
+          usable interpreter; 20.04 ships 3.8 and 18.04 ships 3.6, and both
+          are past end of standard support, so the fix is to rebuild the VM
+          on a current LTS rather than to bolt a newer Python onto it.
+          Docker's apt repository has no packages for those releases either.
+        quiet: true
+
+    # Only now is it safe to run a module.
+    - name: Gather facts
+      ansible.builtin.setup:
 
     - name: Show what is about to be configured
       ansible.builtin.debug:
