@@ -8,3 +8,6 @@
   ansible.builtin.service:
     name: fail2ban
     state: restarted
+  # fail2ban is installed by this play, so under --check the service does not
+  # exist. Handlers are NOT covered by a guard on the task that notifies them.
+  when: not ansible_check_mode

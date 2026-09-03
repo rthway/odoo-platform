@@ -3,3 +3,5 @@
   ansible.builtin.service:
     name: docker
     state: restarted
+  # Docker is installed by this play; nothing to restart under --check.
+  when: not ansible_check_mode

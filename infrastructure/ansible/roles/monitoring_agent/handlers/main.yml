@@ -4,3 +4,5 @@
     name: promtail
     state: started
     restart: true
+  # Needs a running Docker daemon, which check mode has not installed.
+  when: not ansible_check_mode
