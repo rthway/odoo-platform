@@ -92,6 +92,9 @@
         "no-new-privileges": true,
         "default-ulimits": {
           "nofile": {"Name": "nofile", "Hard": 65535, "Soft": 65535}
+        },
+        "features": {
+          "containerd-snapshotter": {{ docker_use_containerd_snapshotter | lower }}
         }
       }
   notify: Restart docker
