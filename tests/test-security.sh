@@ -82,10 +82,14 @@ for probe in .env .env.prod secrets/x.txt id_ed25519 tls/server.key; do
 done
 rmdir secrets tls 2>/dev/null || true
 
-# The example files must survive the ignore rules, or nobody can bootstrap.
-for keep in .env.example .env.prod.example; do
+# Every example file must survive the ignore rules, or nobody can bootstrap
+# an environment. Enumerated from disk rather than hardcoded: a hardcoded list
+# is exactly how a newly added .env.<env>.example gets silently excluded and
+# nobody notices until it is needed.
+for keep in .env*.example; do
+    [[ -f "${keep}" ]] || continue
     if git check-ignore -q "${keep}"; then
-        fail "${keep} is ignored but must be tracked"
+        fail "${keep} exists but .gitignore excludes it - it will never be committed"
     else
         pass "${keep} is tracked"
     fi

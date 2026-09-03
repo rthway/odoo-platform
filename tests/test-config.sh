@@ -57,6 +57,42 @@ for env in dev qa prod; do
 done
 
 # ---------------------------------------------------------------------------
+# 1b. The observability stack resolves
+# ---------------------------------------------------------------------------
+# Checked separately because it needs Grafana credentials that the
+# application .env files do not carry. Its `:?` guards are deliberate: the
+# stack must refuse to start rather than default to admin/admin.
+cp .env.ops.example "${TMP}/.env.ops"
+sed -i \
+    -e 's/^GRAFANA_ADMIN_USER=$/GRAFANA_ADMIN_USER=test-only/' \
+    -e 's/^GRAFANA_ADMIN_PASSWORD=$/GRAFANA_ADMIN_PASSWORD=test-only/' \
+    "${TMP}/.env.ops"
+
+if docker compose --env-file "${TMP}/.env.ops" -f compose.observability.yml config \
+        > "${TMP}/resolved-ops.yml" 2>"${TMP}/err-ops"; then
+    pass "compose.observability.yml resolves"
+else
+    fail "compose.observability.yml does not resolve:"
+    sed 's/^/          /' "${TMP}/err-ops"
+fi
+
+# It must refuse to start without Grafana credentials, not default to them.
+cp .env.ops.example "${TMP}/.env.ops-bare"
+if docker compose --env-file "${TMP}/.env.ops-bare" -f compose.observability.yml config \
+        >/dev/null 2>&1; then
+    fail "observability stack resolves without Grafana credentials - it should refuse"
+else
+    pass "observability stack refuses to start without Grafana credentials"
+fi
+
+# Monitoring endpoints must stay bound to localhost by default.
+if grep -qE '^MONITORING_BIND=127\.0\.0\.1' .env.ops.example; then
+    pass "monitoring endpoints bind to localhost by default"
+else
+    fail "MONITORING_BIND is not 127.0.0.1 - Prometheus would be published unauthenticated"
+fi
+
+# ---------------------------------------------------------------------------
 # 2. Environment isolation
 # ---------------------------------------------------------------------------
 if "${PYTHON}" - "${TMP}" <<'PY'
