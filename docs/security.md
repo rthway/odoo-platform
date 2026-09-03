@@ -137,6 +137,7 @@ Recorded deliberately rather than left implicit:
 
 | Risk | Why it is accepted | Mitigation |
 |---|---|---|
+| **Docker-published ports bypass ufw** | Docker inserts its own iptables rules ahead of ufw's INPUT chain, so a published port is reachable even when ufw appears to deny it. This affects Loki's 3100 on OPS, the only monitoring port not bound to loopback. | Loki binds to the host's INTERNAL address only, which is a private RFC1918 network behind NAT with no port forward. The ufw rule is kept because it is correct if traffic ever arrives via the host stack, but it is not the control doing the work. Proper filtering would need rules in the `DOCKER-USER` chain - recorded as an improvement, not claimed as done. |
 | The deploy user is in the `docker` group, which is root-equivalent | Deployments would otherwise need passwordless sudo, which is no better | Key-only SSH, fail2ban, dedicated account |
 | promtail mounts the Docker socket read-only | Required for container log discovery | Read-only, and the container is not exposed |
 | cAdvisor runs privileged | Required to read cgroup and device statistics | Reachable only from OPS via ufw |
@@ -145,8 +146,9 @@ Recorded deliberately rather than left implicit:
 
 ## Outstanding
 
-- [ ] Servers not audited — SSH access unavailable, so the hardening in
-      `roles/common` has never been applied or verified
+- [x] Servers audited, and `roles/common` **applied and verified on DEV and
+      OPS**: ufw active with the intended rules, fail2ban and chrony running,
+      SSH hardened. QA and PROD not yet provisioned.
 - [ ] No real TLS certificates; DEV and QA use self-signed
 - [ ] SonarQube not deployed
 - [ ] CodeQL will not run until `addons/` contains Python

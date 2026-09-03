@@ -20,8 +20,29 @@ from OPS**, enforced by ufw.
 
 ```bash
 docker compose -f compose.observability.yml up -d
-ssh -L 3000:127.0.0.1:3000 <user>@157.10.100.232
+ssh -L 3000:127.0.0.1:3000 devops@157.10.100.232
 ```
+
+### One exception to localhost binding
+
+Grafana, Prometheus and Alertmanager bind to `127.0.0.1`: they are human-facing
+and reached over an SSH tunnel.
+
+**Loki does not**, and cannot. It exists to receive pushes from promtail on
+DEV, QA and PROD, so binding it to loopback makes log shipping fail silently -
+promtail retries with `context deadline exceeded` and Loki ingests nothing,
+while every component reports healthy. It binds to the host's internal address
+via its own `LOKI_BIND`.
+
+Querying Loki directly on OPS therefore uses the internal address, not
+localhost:
+
+```bash
+curl -s http://192.168.2.56:3100/loki/api/v1/label/service/values
+```
+
+Grafana is unaffected either way - it reaches Loki over the compose network as
+`loki:3100`, which is how anyone should normally be querying it.
 
 ## Why blackbox probing matters
 
@@ -145,7 +166,19 @@ Grafana reloads provisioned dashboards every 30 seconds on its own.
 
 ## Current status
 
-> The stack has never run. No Prometheus target has been scraped, no dashboard
-> has rendered live data, and no alert has fired. Everything above is validated
-> configuration, not observed behaviour. After the first deployment, check
-> **Status → Targets** in Prometheus and confirm all four hosts report.
+Running on OPS `.232` since 2026-09-03 and verified against the live stack:
+
+| | |
+|---|---|
+| Prometheus | healthy; **26 rules across 7 groups loaded** |
+| Grafana | healthy; 2 datasources, **5 dashboards provisioned** |
+| Alertmanager | healthy; **6 receivers**, 4 inhibition rules |
+| Loki | ready, **ingesting from DEV** (`service=db,odoo,proxy`) |
+| Blackbox, node-exporter, cAdvisor | up |
+| Scrape targets | DEV node/cAdvisor/postgres **UP**; QA and PROD down, not yet provisioned |
+| Alerts firing | `PrometheusTargetMissing` for the unprovisioned hosts, and
+  `BackupMissingEntirely` for prod - both correct |
+
+Still outstanding: QA and PROD exporters (those hosts are not provisioned), and
+no alert has yet been *delivered*, because no SMTP or Slack destination is
+configured. Receivers render bare until one is, which is why the stack starts.
