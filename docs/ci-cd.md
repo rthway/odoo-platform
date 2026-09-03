@@ -10,6 +10,17 @@
 | `deploy-dev.yml` | After a successful Build on develop | — |
 | `deploy-qa.yml` | Manual | — |
 | `deploy-prod.yml` | Manual + **approval** | — |
+| `provision.yml` | Manual | Runs Ansible against a host |
+
+`provision.yml` exists because **Ansible has no Windows control node**, so
+provisioning cannot run from an operator's workstation here. Rather than
+require a separate Linux jump box, the pipeline is the control node: a Linux
+runner, the same per-environment deploy keys, and secrets that never touch a
+shared disk.
+
+It **defaults to `--check --diff`** — applying has to be asked for explicitly
+— and targeting `production` goes through that environment's required
+reviewer, exactly as a deployment does.
 
 ## CI jobs
 
