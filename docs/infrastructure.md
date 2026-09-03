@@ -1,9 +1,10 @@
 # Infrastructure
 
-## Audit
+## Initial audit
 
 Audited **2026-09-03** over SSH as `devops`, read-only. Nothing was installed,
-started, stopped or changed.
+started, stopped or changed. This is the *starting* state of the fleet — see
+[Current state](#current-state) below for what is deployed now.
 
 | | DEV | QA | PROD | OPS |
 |---|---|---|---|---|
@@ -26,18 +27,54 @@ started, stopped or changed.
 | Clock | UTC, synced | UTC, synced | UTC, synced | UTC, synced |
 | Failed units | none | none | none | none |
 
-**All four are bare virtual machines.** There is no existing Odoo deployment,
-no database and no data to preserve anywhere. That removes the migration risk
-this project was originally scoped around: there is nothing to break.
+**All four were bare virtual machines.** There was no existing Odoo
+deployment, no database and no data to preserve anywhere. That removed the
+migration risk this project was originally scoped around: there was nothing
+to break.
+
+## Current state
+
+Re-checked over SSH **2026-09-03**, after the first provisioning runs.
+
+| | DEV | QA | PROD | OPS |
+|---|---|---|---|---|
+| Provisioned | yes | **no** | **no** | yes |
+| Docker | 29.7.2 | not installed | not installed | 29.7.2 |
+| `devops` in `docker` | yes | no | no | yes |
+| Passwordless sudo | yes | yes | yes | yes |
+| ufw | active | **inactive** | **inactive** | active |
+| Reachable on 80/443 | yes | **no** | **no** | yes |
+| Containers running | 7 | 0 | 0 | 8 |
+| Reboot pending | no | **YES** | no | no |
+| Disk free | 82 GB / 98 GB | 97 GB / 99 GB | 86 GB / 98 GB | 37 GB / 49 GB |
+
+**QA and PROD serve nothing yet**, and that is the whole of why a browser
+cannot open them: connections to ports 80 and 443 are refused because no
+process is listening. Both hosts are up and answer SSH. They are not broken
+deployments; they are un-run ones.
+
+- **PROD** is ready to provision — 24.04, Python 3.12, passwordless sudo. It
+  is waiting only on the `production` environment approval that the Provision
+  workflow requires, and then on a run with **Apply** ticked. `--check` alone
+  changes nothing, so a dry run leaves the host exactly as un-deployed as it
+  found it.
+- **QA** cannot be provisioned at all until its operating system is replaced.
+  See [QA runs an end-of-life OS](#2-qa-runs-an-end-of-life-os).
+
+Bindings were verified from outside the fleet: DEV and OPS answer 80 and 443,
+while the exporters (`8081`, `9100`, `9187`) and Grafana, Prometheus,
+Alertmanager and Loki (`3000`, `9090`, `9093`, `3100`) are all refused or
+dropped from off-net, as intended.
 
 ### Access
 
 `devops` exists on all four hosts with key-based SSH and membership of the
-`sudo` group. **Sudo prompts for a password**, so Ansible needs
-`--ask-become-pass` until `NOPASSWD` is granted.
+`sudo` group. `NOPASSWD` has since been granted on all four, so playbooks run
+unattended and `--ask-become-pass` is no longer needed.
 
-`devops` is *not* in a `docker` group — Docker is not installed yet, and the
-`docker` Ansible role adds the account when it installs the engine.
+`devops` is in the `docker` group on DEV and OPS only. The `docker` Ansible
+role adds the account when it installs the engine, so QA and PROD gain it
+when they are provisioned.
 
 ## Findings that changed the design
 
@@ -70,8 +107,22 @@ Python 3.6.9 and a reboot-pending flag. This matters for two reasons:
   production. Production is 24.04 with kernel 6.8; QA is 18.04 with the 4.15
   series. Different kernel, different glibc, different Docker build. A release
   that passes there has not been rehearsed against production's runtime.
-- **Tooling.** Modern `ansible-core` requires Python 3.7+ on managed nodes.
-  3.6.9 is below that floor.
+- **Tooling.** `ansible-core` 2.21 requires Python **3.9 or newer** on
+  managed nodes — `module_utils/basic.py` refuses to run below it — so 3.6.9
+  is three releases under the floor. Nothing can run against QA, including
+  fact gathering: the first provisioning attempt died in `Gathering Facts`
+  with `SyntaxError: future feature annotations is not defined`, which says
+  nothing about the real cause. `site.yml` now reads the interpreter version
+  over `raw` before gathering facts and fails with that explanation instead.
+  Ubuntu 22.04 is the oldest release that clears the floor; 20.04 ships 3.8.
+
+**The fix is to rebuild the VM on 24.04**, matching production, not to install
+a newer Python beside 3.6. An interpreter override would get Ansible running
+and leave every other objection above standing — an EOL kernel, no security
+updates, and a Docker apt repository with no packages for `bionic`.
+
+Procedure, including the spec to match and the `known_hosts` refresh the
+rebuild forces: [`runbooks/qa-os-rebuild.md`](runbooks/qa-os-rebuild.md).
 
 QA is also the only host on `/dev/sda3` rather than `/dev/vda3`, suggesting it
 was built from a different image or at a different time.
