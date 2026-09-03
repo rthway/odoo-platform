@@ -28,6 +28,8 @@
       - curl
       - ca-certificates
       - gnupg
+      # Required by ansible.builtin.deb822_repository in roles/docker.
+      - python3-debian
       - age             # backup encryption
       - postgresql-client
       - jq
