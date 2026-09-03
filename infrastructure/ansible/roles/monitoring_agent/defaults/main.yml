@@ -1,5 +1,23 @@
 ---
-monitoring_server_ip: 157.10.100.232
+monitoring_server_ip: 192.168.2.56
+
 node_exporter_version: v1.8.2
 cadvisor_version: v0.52.1
 postgres_exporter_version: v0.16.0
+loki_version: "3.3.2"
+
+# --- postgres_exporter connection -----------------------------------------
+# Derived from env_name so they cannot drift from what roles/odoo_deploy
+# renders into .env. These previously had no defaults at all, which meant the
+# role failed on every application host with an undefined-variable error.
+#
+# postgres_host is the compose SERVICE NAME, not an IP: the exporter joins the
+# stack's backend network and resolves `db` there. The database publishes no
+# port, so there is no address to connect to from outside.
+postgres_host: db
+postgres_user: "odoo_{{ env_name }}"
+postgres_db: "odoo_{{ env_name }}"
+
+# postgres_password has no default on purpose - it must come from the vault
+# or from group_vars, exactly as it does for roles/odoo_deploy. A default
+# here would be a shared password on every host.
