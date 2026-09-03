@@ -27,6 +27,9 @@
     # local changes is safe and keeps hosts identical.
     force: true
     depth: 50
+  # git is installed by roles/common in this same play, so it is not on the
+  # host yet under --check.
+  when: not ansible_check_mode
   tags: [code]
 
 - name: Ensure scripts are executable after checkout
