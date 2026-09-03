@@ -86,6 +86,26 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
 
+      # A host that has never been provisioned fails with `cd: No such file
+      # or directory` and exit 127, which says nothing useful. Check first and
+      # name the fix.
+      - name: Verify the host is provisioned
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          APP_DIR: ${{ vars.APP_DIR || '/opt/odoo-platform' }}
+        run: |
+          set -euo pipefail
+          if ! ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+                 "${SSH_USER}@${SSH_HOST}" \
+                 "test -x '${APP_DIR}/scripts/deploy.sh'"; then
+            echo "::error::${SSH_HOST} is not provisioned: ${APP_DIR}/scripts/deploy.sh is missing."
+            echo "Run the 'Provision' workflow for this environment first"
+            echo "(dry run by default; tick 'apply' to make changes)."
+            exit 1
+          fi
+          echo "host is provisioned"
+
       - name: Deploy
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
