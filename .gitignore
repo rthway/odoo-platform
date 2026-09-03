@@ -20,6 +20,10 @@ id_ed25519*
 *.age
 *.gpg
 
+# Rendered by Ansible from alertmanager.yml.j2 - it contains real
+# webhook URLs and mail settings, so it must never be committed.
+monitoring/alertmanager/alertmanager.generated.yml
+
 # TLS material generated on the host
 config/nginx/tls/*
 !config/nginx/tls/.gitkeep

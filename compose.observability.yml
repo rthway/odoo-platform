@@ -63,7 +63,10 @@ services:
       - --storage.path=/alertmanager
       - --web.external-url=${ALERTMANAGER_EXTERNAL_URL:-http://localhost:9093}
     volumes:
-      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # The GENERATED file, rendered by Ansible from alertmanager.yml.j2.
+      # Alertmanager does not expand environment variables, so the config it
+      # reads must already have real values in it.
+      - ./monitoring/alertmanager/alertmanager.generated.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager-data:/alertmanager
     ports:
       - "${MONITORING_BIND:-127.0.0.1}:${ALERTMANAGER_PORT:-9093}:9093"

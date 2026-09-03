@@ -1,0 +1,225 @@
+---
+# ===========================================================================
+# Alertmanager - routing, grouping and inhibition
+# ===========================================================================
+# THIS IS A JINJA TEMPLATE. Ansible renders it to
+# monitoring/alertmanager/alertmanager.generated.yml, which compose mounts.
+#
+# Alertmanager does NOT expand environment variables in its configuration.
+# An unsubstituted ${SMTP_SMARTHOST} reaches it verbatim and it refuses to
+# start with "missing port in address", crash-looping while everything around
+# it looks healthy. Rendering ahead of time is the only way to supply secrets.
+#
+# Alertmanager's own templates use Go syntax with the same braces as Jinja, so
+# every one of those is wrapped in a Jinja raw block below. Without that,
+# Jinja eats them and the notifications arrive empty.
+#
+# Note the phrasing: writing that tag literally in this comment - even inside
+# a '#' comment - OPENS a raw block, because Jinja does not know about YAML
+# comments. It swallowed the whole file until the first closing tag and every
+# conditional below became inert text.
+#
+# A receiver whose notifier is not configured is emitted bare, which is valid
+# and means "route here, notify nowhere". The stack therefore starts and
+# routing stays correct before email or Slack exists - which matters, because
+# a monitoring stack that will not start is worse than one that is quiet.
+#
+# Routing is verified with:
+#   amtool config routes test --config.file=... alertname=X severity=Y environment=Z
+# ===========================================================================
+
+global:
+  resolve_timeout: 5m
+{% if smtp_smarthost | default('') %}
+  smtp_smarthost: "{{ smtp_smarthost }}"
+  smtp_from: "{{ smtp_from | default('alerts@localhost') }}"
+  smtp_require_tls: true
+{% endif %}
+
+# ---------------------------------------------------------------------------
+route:
+  # Group by alertname AND environment: a DEV outage and a PROD outage of the
+  # same rule must never be collapsed into one notification.
+  group_by: ["alertname", "environment"]
+  # Wait briefly for related alerts. When a server dies its node, container
+  # and probe alerts all fire within seconds; this makes that one notification.
+  group_wait: 30s
+  group_interval: 5m
+  # Do not re-notify for 4 hours unless something changes. Shorter intervals
+  # train people to ignore the channel.
+  repeat_interval: 4h
+  receiver: default
+
+  # ORDER MATTERS. Alertmanager takes the FIRST matching route, so the most
+  # specific exclusions come first. Verified with `amtool config routes test`;
+  # an earlier ordering sent DEV criticals to the paging receiver and sent
+  # production backup alerts to the on-call channel.
+  routes:
+    # DEV first, unconditionally. DEV is expected to break - that is what it
+    # is for - and must never page anyone, whatever the severity.
+    - matchers:
+        - environment = "dev"
+      receiver: low-priority
+      group_wait: 5m
+      repeat_interval: 24h
+
+    # Backup alerts before the severity routes. Urgent, but not an outage:
+    # nobody should be woken, and equally they must not sit unread for days.
+    - matchers:
+        - alertname =~ "Backup.*"
+      receiver: backup-alerts
+      group_wait: 1m
+      repeat_interval: 12h
+
+    # Production criticals page immediately and repeat aggressively.
+    - matchers:
+        - severity = "critical"
+        - environment = "prod"
+      receiver: critical-prod
+      group_wait: 10s
+      repeat_interval: 1h
+
+    # Criticals in every other environment (QA, OPS).
+    - matchers:
+        - severity = "critical"
+      receiver: critical
+      repeat_interval: 2h
+
+    - matchers:
+        - severity = "warning"
+      receiver: warnings
+
+    - matchers:
+        - severity = "info"
+      receiver: low-priority
+      repeat_interval: 24h
+
+# ---------------------------------------------------------------------------
+# Inhibition - suppress alerts whose cause is already being reported.
+# ---------------------------------------------------------------------------
+inhibit_rules:
+  # A dead server produces an Odoo alert, a Postgres alert and container
+  # alerts. Report the server; suppress the consequences.
+  - source_matchers:
+      - alertname = "ServerDown"
+    target_matchers:
+      - severity =~ "warning|critical"
+    equal: ["instance_name"]
+
+  # If PostgreSQL is down, Odoo being down is a symptom, not news.
+  - source_matchers:
+      - alertname = "PostgreSQLDown"
+    target_matchers:
+      - alertname =~ "Odoo.*"
+    equal: ["environment"]
+
+  # Never send the warning-level twin of a critical that is already firing.
+  - source_matchers:
+      - severity = "critical"
+    target_matchers:
+      - severity = "warning"
+    equal: ["alertname", "environment"]
+
+  # Disk critical supersedes disk warning on the same filesystem.
+  - source_matchers:
+      - alertname = "DiskSpaceCritical"
+    target_matchers:
+      - alertname =~ "DiskSpaceLow|DiskWillFillIn24Hours"
+    equal: ["instance_name", "mountpoint"]
+
+# ---------------------------------------------------------------------------
+receivers:
+
+  - name: default
+{% if alert_email_to | default('') %}
+    email_configs:
+      - to: "{{ alert_email_to }}"
+        send_resolved: true
+{% endif %}
+
+  - name: critical-prod
+{% if alert_email_critical | default('') %}
+    email_configs:
+      - to: "{{ alert_email_critical }}"
+        send_resolved: true
+        headers:
+          Subject: "[CRITICAL PROD] {% raw %}{{ .CommonAnnotations.summary }}{% endraw %}"
+{% endif %}
+{% if alert_slack_webhook_url | default('') %}
+    slack_configs:
+      - api_url: "{{ alert_slack_webhook_url }}"
+        channel: "{{ alert_slack_channel_critical | default('#alerts') }}"
+        send_resolved: true
+        title: "CRITICAL - PRODUCTION"
+        text: |
+          {% raw %}{{ range .Alerts }}*{{ .Annotations.summary }}*
+          {{ .Annotations.description }}
+          {{ if .Annotations.runbook }}Runbook: `{{ .Annotations.runbook }}`{{ end }}
+          {{ end }}{% endraw %}
+{% endif %}
+
+  - name: critical
+{% if alert_email_to | default('') %}
+    email_configs:
+      - to: "{{ alert_email_to }}"
+        send_resolved: true
+        headers:
+          Subject: "[CRITICAL {% raw %}{{ .CommonLabels.environment }}{% endraw %}] {% raw %}{{ .CommonAnnotations.summary }}{% endraw %}"
+{% endif %}
+{% if alert_slack_webhook_url | default('') %}
+    slack_configs:
+      - api_url: "{{ alert_slack_webhook_url }}"
+        channel: "{{ alert_slack_channel | default('#alerts') }}"
+        send_resolved: true
+        title: "CRITICAL - {% raw %}{{ .CommonLabels.environment }}{% endraw %}"
+        text: |
+          {% raw %}{{ range .Alerts }}*{{ .Annotations.summary }}*
+          {{ .Annotations.description }}
+          {{ end }}{% endraw %}
+{% endif %}
+
+  - name: backup-alerts
+{% if alert_email_to | default('') %}
+    email_configs:
+      - to: "{{ alert_email_to }}"
+        send_resolved: true
+        headers:
+          Subject: "[BACKUP] {% raw %}{{ .CommonAnnotations.summary }}{% endraw %}"
+{% endif %}
+{% if alert_slack_webhook_url | default('') %}
+    slack_configs:
+      - api_url: "{{ alert_slack_webhook_url }}"
+        channel: "{{ alert_slack_channel | default('#alerts') }}"
+        send_resolved: true
+        title: "Backup problem"
+        text: |
+          {% raw %}{{ range .Alerts }}*{{ .Annotations.summary }}*
+          {{ .Annotations.description }}
+          {{ if .Annotations.runbook }}Runbook: `{{ .Annotations.runbook }}`{{ end }}
+          {{ end }}{% endraw %}
+{% endif %}
+
+  - name: warnings
+{% if alert_slack_webhook_url | default('') %}
+    slack_configs:
+      - api_url: "{{ alert_slack_webhook_url }}"
+        channel: "{{ alert_slack_channel | default('#alerts') }}"
+        send_resolved: true
+        title: "Warning - {% raw %}{{ .CommonLabels.environment }}{% endraw %}"
+        text: |
+          {% raw %}{{ range .Alerts }}{{ .Annotations.summary }}
+          {{ end }}{% endraw %}
+{% endif %}
+
+  # Delivered, but never paged. Reviewed on the dashboard.
+  - name: low-priority
+{% if alert_slack_webhook_url | default('') %}
+    slack_configs:
+      - api_url: "{{ alert_slack_webhook_url }}"
+        channel: "{{ alert_slack_channel_low | default('#alerts-info') }}"
+        send_resolved: false
+        title: "FYI - {% raw %}{{ .CommonLabels.environment }}{% endraw %}"
+        text: |
+          {% raw %}{{ range .Alerts }}{{ .Annotations.summary }}
+          {{ end }}{% endraw %}
+{% endif %}
