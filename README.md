@@ -421,34 +421,68 @@ Design decisions and their trade-offs are recorded in [`docs/adr/`](docs/adr/).
 
 ## Current status
 
-This platform was built and verified from a Windows workstation. Everything
-that could be verified locally **was**, with the real tools; everything that
-needs the servers is honestly marked as pending.
+Honest account of what is proven and what is not.
 
-**Verified locally**
+### Verified by the live pipeline
 
-- `docker compose config` resolves for all three overlays, and the resolved
-  output confirms separate databases, `list_db=False` in QA/PROD and no host
-  bind mounts outside DEV
-- `actionlint` clean across all 6 workflows
-- `promtool` — 26 alert rules and all 57 dashboard expressions valid
-- `amtool` — config valid; **10/10 routing cases** verified against intent
-- 38 assertions in `tests/run-all.sh`, negative-tested so they cannot pass vacuously
-- Backup retention exercised against 40 generated sets
+The GitHub Actions pipelines run on every push and are **green**. The
+integration job is the substantive one: it builds the image, runs real Odoo
+against real PostgreSQL behind real nginx, and exercises the recovery path.
 
-**Pending server access**
+| Evidence | Result |
+|---|---|
+| Image builds, Odoo starts, registry loads | `/web/login` → **200** |
+| Health checks | HEALTHY — containers, restarts, DB query, HTTP |
+| Smoke tests | **15 passed, 0 failed** |
+| Security headers present, nginx version hidden | pass |
+| Database manager blocked | **404** |
+| Backup from a real database | 1.1 MB dump + 677 KB filestore, checksums verified |
+| **Restore into a throwaway container** | **123 tables, 7 users, 12 installed modules — in 2s** |
+| Trivy image scan + CRITICAL/HIGH policy gate | pass |
+| OCI revision label matches the commit | pass |
+| Container does not run as root | pass |
+| Gitleaks over full history | **no secrets found** |
+| Trivy filesystem/config/secret scan | pass |
+| Ansible syntax check + ansible-lint | pass |
 
-- Nothing has been deployed. No SSH key was available for `.223`/`.230`/`.231`/`.232`.
-- Docker image never built or scanned (no local Docker daemon)
-- Prometheus targets, Grafana dashboards and Loki ingestion unverified against live data
-- No backup has been taken from a real database
-- **Off-site backup not configured — 3-2-1 is not yet satisfied**
-- SonarQube not deployed; CodeQL will activate once `addons/` contains Python
+Validated locally with the real tools: `promtool` (26 alert rules, 57
+dashboard expressions), `amtool` (config plus **10/10 routing cases**),
+`actionlint` with shellcheck, `shellcheck`, and 41 assertions in
+`tests/run-all.sh` — negative-tested so they cannot pass vacuously.
 
-See the closing section of [`docs/runbook.md`](docs/runbook.md) for the exact
-steps to bring each of those online.
+### Repository
 
----
+- Published at <https://github.com/rthway/odoo-platform>
+- `main` and `develop` protected: PR required, **CI passed** and
+  **Security passed** required, 1 approval, stale reviews dismissed, force
+  pushes and deletions blocked
+- Environments `dev`, `qa` and `production` created; **production requires a
+  reviewer** and accepts deployments only from protected branches
+
+### Not yet done
+
+Nothing has been deployed to a server.
+
+```
+SSH        no key available; root refused on .223/.230/.231/.232.
+           Blocks the infrastructure audit, all deployments,
+           monitoring and backups.
+Docker Hub DOCKERHUB_USERNAME/TOKEN not set, so images are built and
+           scanned on every push but NOT published. Nothing is
+           deployable until they exist.
+Servers    never audited, never provisioned, never deployed to.
+Monitoring config validated, but no target has ever been scraped and
+           no alert has ever fired.
+Off-site   BACKUP_OFFSITE_TARGET unset - 3-2-1 is NOT satisfied.
+SonarQube  not deployed.
+CodeQL     correctly skipped until addons/ contains Python.
+DNS/TLS    no domain; DEV and QA use self-signed certificates.
+Rehearsals rollback, production restore and PITR have never been run
+           against real infrastructure.
+```
+
+The ordered steps to close each of these are in
+[`docs/runbook.md`](docs/runbook.md#bringing-the-platform-online).
 
 ## Licence
 
