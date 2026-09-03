@@ -22,9 +22,36 @@ services:
   # -----------------------------------------------------------------------
   # PostgreSQL
   # -----------------------------------------------------------------------
+  # Docker creates a named volume's root as root:root 0755, and the postgres
+  # entrypoint chowns only PGDATA - so wal_archive stayed unwritable to the
+  # postgres user and archive_command failed on every segment from the first
+  # one onward. A failing archive_command does not stop PostgreSQL; it just
+  # retries forever, so the stack looked healthy while point-in-time recovery
+  # had never once worked and pg_wal grew without bound.
+  #
+  # Same image as db, so this pulls nothing extra and the postgres user is
+  # guaranteed to exist with the uid the database will run as.
+  wal-archive-init:
+    image: postgres:${POSTGRES_VERSION:-16.15-alpine3.24}
+    user: root
+    restart: "no"
+    command:
+      - sh
+      - -c
+      # 0700 because archived WAL is a full copy of the data. Owner-only, as
+      # PGDATA itself is.
+      - chown postgres:postgres /var/lib/postgresql/wal_archive &&
+        chmod 0700 /var/lib/postgresql/wal_archive
+    volumes:
+      - wal-archive:/var/lib/postgresql/wal_archive
+    logging: *default-logging
+
   db:
     image: postgres:${POSTGRES_VERSION:-16.15-alpine3.24}
     restart: unless-stopped
+    depends_on:
+      wal-archive-init:
+        condition: service_completed_successfully
     # NO `ports:`. The database is reachable only from the backend network.
     # Exposing 5432 to the host is the single most common way an Odoo
     # deployment ends up with a publicly readable database.
