@@ -72,13 +72,13 @@
   ansible.builtin.assert:
     that:
       - env_stat.stat.mode == "0600"
+    fail_msg: >-
+      {{ app_dir }}/.env is {{ env_stat.stat.mode }}, expected 0600. It holds
+      the database and Odoo master passwords.
   # Under --check the file was never written, so stat reports it absent and
   # .mode is undefined - the assertion would fail on a file this run was
   # never going to create.
   when: not ansible_check_mode
-    fail_msg: >-
-      {{ app_dir }}/.env is {{ env_stat.stat.mode }}, expected 0600. It holds
-      the database and Odoo master passwords.
   tags: [config, secrets]
 
 # ---------------------------------------------------------------------------
