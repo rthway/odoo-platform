@@ -1,0 +1,34 @@
+---
+version: 2
+updates:
+  # Actions are the highest-value target here: a compromised or abandoned
+  # action runs with access to deployment secrets.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    labels: [dependencies, ci]
+
+  - package-ecosystem: docker
+    directory: /docker/odoo
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "build"
+    labels: [dependencies, docker]
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build"
+    labels: [dependencies, python]
