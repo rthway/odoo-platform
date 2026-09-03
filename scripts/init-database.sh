@@ -19,13 +19,14 @@
 #     creating an empty database
 #
 # Usage:
-#   scripts/init-database.sh -e dev
+#   scripts/init-database.sh -e dev -t 2026.09.03-a1b2c3d
 #   scripts/init-database.sh -e qa -m base,web
 # ===========================================================================
 set -Eeuo pipefail
 
 ENVIRONMENT=""
 MODULES="base"
+IMAGE_TAG_OPT=""
 CONFIRM_PROD=0
 COMPOSE_DIR="${COMPOSE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
@@ -33,6 +34,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -e|--environment) ENVIRONMENT="$2"; shift 2 ;;
         -m|--modules)     MODULES="$2"; shift 2 ;;
+        -t|--tag)         IMAGE_TAG_OPT="$2"; shift 2 ;;
         --i-am-bootstrapping-production) CONFIRM_PROD=1; shift ;;
         -h|--help)        sed -n '2,24p' "$0"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -51,6 +53,19 @@ set -a
 set +a
 
 : "${ODOO_DB_NAME:?ODOO_DB_NAME is required}"
+
+# The image tag is a property of the deployment, so .env may not carry one
+# yet on a host that has never had a successful deployment - which is exactly
+# when this script runs. Take it from -t, then from .env, then from the
+# recorded deployment state.
+if [[ -n "${IMAGE_TAG_OPT}" ]]; then
+    ODOO_IMAGE_TAG="${IMAGE_TAG_OPT}"
+elif [[ -z "${ODOO_IMAGE_TAG:-}" && -r "${COMPOSE_DIR}/.deploy-state/current" ]]; then
+    ODOO_IMAGE_TAG="$(cat "${COMPOSE_DIR}/.deploy-state/current")"
+fi
+[[ -n "${ODOO_IMAGE_TAG:-}" ]] \
+    || die "no image tag. Pass -t <tag>, or deploy once first - compose cannot start a service without one."
+export ODOO_IMAGE_TAG
 
 compose() {
     docker compose --project-directory "${COMPOSE_DIR}" \
