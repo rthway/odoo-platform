@@ -1,0 +1,138 @@
+---
+# ===========================================================================
+# Prometheus - central scrape configuration (runs on OPS .232)
+# ===========================================================================
+# Every target carries an `environment` label. Without it, an alert saying
+# "Odoo is down" cannot tell an operator whether to get out of bed.
+# ===========================================================================
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: odoo-platform
+    site: primary
+
+rule_files:
+  - /etc/prometheus/alerts/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+
+  # -----------------------------------------------------------------------
+  # Prometheus itself. If this stops reporting, nothing else can be trusted.
+  # -----------------------------------------------------------------------
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels:
+          environment: ops
+          instance_name: prometheus
+
+  # -----------------------------------------------------------------------
+  # Host metrics: CPU, memory, disk, network, load, filesystem.
+  # Also carries the backup metrics written by scripts/backup.sh through the
+  # textfile collector.
+  # -----------------------------------------------------------------------
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels: {environment: ops, instance_name: ops-232}
+      - targets: ["157.10.100.223:9100"]
+        labels: {environment: dev, instance_name: dev-223}
+      - targets: ["157.10.100.230:9100"]
+        labels: {environment: qa, instance_name: qa-230}
+      - targets: ["157.10.100.231:9100"]
+        labels: {environment: prod, instance_name: prod-231}
+
+  # -----------------------------------------------------------------------
+  # Container metrics: per-container CPU, memory, restarts, filesystem.
+  # -----------------------------------------------------------------------
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+        labels: {environment: ops, instance_name: ops-232}
+      - targets: ["157.10.100.223:8081"]
+        labels: {environment: dev, instance_name: dev-223}
+      - targets: ["157.10.100.230:8081"]
+        labels: {environment: qa, instance_name: qa-230}
+      - targets: ["157.10.100.231:8081"]
+        labels: {environment: prod, instance_name: prod-231}
+    metric_relabel_configs:
+      # cAdvisor is extremely verbose. Keeping only what the dashboards and
+      # alerts actually use cuts storage dramatically.
+      - source_labels: [__name__]
+        regex: "container_(cpu_usage_seconds_total|memory_working_set_bytes|memory_usage_bytes|fs_usage_bytes|fs_limit_bytes|network_receive_bytes_total|network_transmit_bytes_total|start_time_seconds|last_seen|spec_memory_limit_bytes)"
+        action: keep
+      # Drop the pod-less noise cAdvisor emits for cgroup roots.
+      - source_labels: [container_label_com_docker_compose_service]
+        regex: ""
+        action: drop
+
+  # -----------------------------------------------------------------------
+  # PostgreSQL: connections, size, transactions, locks, cache, WAL.
+  # postgres_exporter runs beside the database on each application host.
+  # -----------------------------------------------------------------------
+  - job_name: postgres
+    static_configs:
+      - targets: ["157.10.100.223:9187"]
+        labels: {environment: dev, instance_name: dev-223}
+      - targets: ["157.10.100.230:9187"]
+        labels: {environment: qa, instance_name: qa-230}
+      - targets: ["157.10.100.231:9187"]
+        labels: {environment: prod, instance_name: prod-231}
+
+  # -----------------------------------------------------------------------
+  # Odoo availability and response time, probed from outside over HTTP.
+  # This is the metric that most closely matches "can a user work?".
+  # -----------------------------------------------------------------------
+  - job_name: blackbox-odoo
+    metrics_path: /probe
+    params:
+      module: [odoo_http]
+    static_configs:
+      - targets: ["http://157.10.100.223:8080/web/health"]
+        labels: {environment: dev, instance_name: dev-223, service: odoo}
+      - targets: ["http://157.10.100.230:8080/web/health"]
+        labels: {environment: qa, instance_name: qa-230, service: odoo}
+      - targets: ["http://157.10.100.231/web/health"]
+        labels: {environment: prod, instance_name: prod-231, service: odoo}
+    relabel_configs:
+      # The standard blackbox indirection: the target becomes a parameter to
+      # the exporter, and `instance` is rewritten back to the probed URL.
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115
+
+  # -----------------------------------------------------------------------
+  # TLS certificate expiry. Certificates expire on a schedule, which makes
+  # this one of the few outages that is entirely preventable.
+  # -----------------------------------------------------------------------
+  - job_name: blackbox-tls
+    metrics_path: /probe
+    params:
+      module: [tls_connect]
+    static_configs:
+      - targets: []
+        labels: {environment: prod, service: tls}
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115
+
+  # -----------------------------------------------------------------------
+  - job_name: loki
+    static_configs:
+      - targets: ["loki:3100"]
+        labels: {environment: ops, instance_name: loki}
