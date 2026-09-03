@@ -38,10 +38,14 @@
     signed_by: /etc/apt/keyrings/docker.asc
     state: present
     enabled: true
-    # deb822_repository needs python3-debian, and under --check it will not
-    # install it for itself unless asked. Without this the dry run fails with
-    # "python3-debian must be installed to use check mode".
     install_python_debian: true
+  # deb822_repository needs python3-debian on the target. roles/common
+  # installs it, but on a host that has never been provisioned check mode
+  # only SIMULATES that install, so the module still cannot run - and
+  # install_python_debian cannot rescue it, because installing is itself a
+  # change check mode will not make. Skipped on a dry run for the same reason
+  # as every other task here that depends on a package this play installs.
+  when: not ansible_check_mode
 
 - name: Install Docker Engine and the Compose plugin
   ansible.builtin.apt:
