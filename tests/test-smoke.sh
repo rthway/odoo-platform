@@ -145,11 +145,18 @@ for svc in db odoo proxy; do
 done
 
 # --- 10. No errors in recent application logs ------------------------------
-errors="$(compose logs --tail 200 odoo 2>/dev/null | grep -icE 'CRITICAL|Traceback' || true)"
+# A TIME window, not `--tail 200`. The question a smoke test needs to answer
+# is "is this deployment erroring now?", and a line count cannot answer it:
+# after a quiet period the last 200 lines still contain whatever went wrong
+# hours ago, so the check fails on problems that are already fixed. That is
+# exactly what happened on the first DEV deployment - the pre-initialisation
+# tracebacks kept failing the smoke test long after the database was fixed.
+LOG_WINDOW="${SMOKE_LOG_WINDOW:-5m}"
+errors="$(compose logs --since "${LOG_WINDOW}" odoo 2>/dev/null | grep -icE 'CRITICAL|Traceback' || true)"
 if [[ "${errors}" == "0" ]]; then
-    pass "no CRITICAL entries or tracebacks in the last 200 log lines"
+    pass "no CRITICAL entries or tracebacks in the last ${LOG_WINDOW}"
 else
-    fail "${errors} CRITICAL/traceback line(s) in recent Odoo logs"
+    fail "${errors} CRITICAL/traceback line(s) in the last ${LOG_WINDOW} of Odoo logs"
 fi
 
 # ---------------------------------------------------------------------------
