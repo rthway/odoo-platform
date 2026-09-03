@@ -1,0 +1,112 @@
+# ===========================================================================
+# Odoo virtual host
+# ===========================================================================
+# Rendered from this template at container start by nginx's own envsubst
+# entrypoint (docker-entrypoint.d), substituting ${ODOO_DOMAIN}.
+# ===========================================================================
+
+# --- HTTP: redirect everything to HTTPS, except the ACME challenge ---------
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${ODOO_DOMAIN};
+
+    # Let's Encrypt HTTP-01 must stay reachable over plain HTTP or renewal
+    # fails, and a failed renewal becomes an outage 90 days later.
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type "text/plain";
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# --- HTTPS ----------------------------------------------------------------
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ${ODOO_DOMAIN};
+
+    ssl_certificate     /etc/nginx/tls/fullchain.pem;
+    ssl_certificate_key /etc/nginx/tls/privkey.pem;
+
+    # TLS 1.2 and 1.3 only. 1.0/1.1 are deprecated and fail most audits.
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    include /etc/nginx/snippets/security-headers.conf;
+
+    limit_conn odoo_conn 32;
+
+    # Odoo builds absolute URLs from these. Combined with proxy_mode=True in
+    # odoo.conf, this is what stops Odoo emitting http:// links behind TLS.
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host  $host;
+    proxy_redirect off;
+
+    proxy_connect_timeout 60s;
+    proxy_send_timeout    720s;
+    proxy_read_timeout    720s;
+
+    # --- Authentication endpoints: tight rate limit -----------------------
+    location ~ ^/(web/login|web/session/authenticate|web/reset_password) {
+        limit_req zone=odoo_login burst=5 nodelay;
+        proxy_pass http://odoo_app;
+    }
+
+    # --- Database manager: blocked at the proxy ---------------------------
+    # Defence in depth. list_db=False already hides it, but if that is ever
+    # misconfigured the proxy still refuses create/drop/restore over HTTP.
+    location ~ ^/web/database/(create|drop|restore|manager|backup) {
+        deny all;
+        return 404;
+    }
+
+    # --- Longpolling / websockets -----------------------------------------
+    location /websocket {
+        proxy_pass http://odoo_chat;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        # Long-lived by design; a short read timeout kills live notifications.
+        proxy_read_timeout 3600s;
+    }
+
+    location /longpolling {
+        proxy_pass http://odoo_chat;
+        proxy_read_timeout 3600s;
+    }
+
+    # --- Static assets ----------------------------------------------------
+    # Odoo fingerprints asset bundle URLs, so a long cache is safe and cuts
+    # a large amount of load off the application workers.
+    location ~ ^/web/(static|image|content|assets)/ {
+        proxy_pass http://odoo_app;
+        proxy_cache_valid 200 302 60m;
+        expires 7d;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # --- Health endpoint ---------------------------------------------------
+    # Not logged: the deploy pipeline and Prometheus blackbox poll it often.
+    location = /web/health {
+        proxy_pass http://odoo_app;
+        access_log off;
+    }
+
+    # --- Everything else ---------------------------------------------------
+    location / {
+        limit_req zone=odoo_general burst=60 nodelay;
+        proxy_pass http://odoo_app;
+    }
+}

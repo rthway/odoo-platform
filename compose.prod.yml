@@ -1,0 +1,63 @@
+# ===========================================================================
+# PRODUCTION overlay - 157.10.100.231
+# ===========================================================================
+# Deployed only through .github/workflows/deploy-prod.yml, which requires a
+# human approval on the protected `production` environment and takes a
+# verified backup first. Never run this by hand except during an incident,
+# following docs/runbook.md.
+#   docker compose -f compose.yml -f compose.prod.yml up -d
+# ===========================================================================
+
+services:
+
+  db:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: ${DB_MEMORY_LIMIT:-4g}
+        reservations:
+          memory: 2g
+    # A slow shutdown is better than a fast one: PostgreSQL must be allowed
+    # to finish its checkpoint, or startup replays WAL and recovery is longer.
+    stop_grace_period: 120s
+    security_opt:
+      - no-new-privileges:true
+
+  odoo:
+    restart: always
+    # No host mounts of any kind. Everything the application runs is baked
+    # into the promoted image, so what QA tested is byte-identical to this.
+    volumes:
+      - odoo-filestore:/var/lib/odoo
+    environment:
+      ODOO_WORKERS: ${ODOO_WORKERS:?set ODOO_WORKERS explicitly in production}
+      ODOO_LIST_DB: "False"
+      ODOO_PROXY_MODE: "True"
+      ODOO_LOG_LEVEL: ${ODOO_LOG_LEVEL:-warn}
+    deploy:
+      resources:
+        limits:
+          memory: ${ODOO_MEMORY_LIMIT:-6g}
+        reservations:
+          memory: 2g
+    stop_grace_period: 120s
+    security_opt:
+      - no-new-privileges:true
+    # Odoo needs to write its filestore and session data, so the root
+    # filesystem cannot be fully read-only. Privilege escalation is blocked
+    # above instead, and the container already runs as the non-root odoo user.
+
+  proxy:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    # With read_only the writable paths must be declared explicitly.
+    tmpfs:
+      - /var/run
+      - /tmp

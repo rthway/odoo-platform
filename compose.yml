@@ -1,0 +1,150 @@
+# ===========================================================================
+# Base stack - shared by DEV, QA and PROD
+# ===========================================================================
+# Never used alone in QA or PROD. Always combined with an overlay:
+#   docker compose -f compose.yml -f compose.dev.yml  up -d
+#   docker compose -f compose.yml -f compose.qa.yml   up -d
+#   docker compose -f compose.yml -f compose.prod.yml up -d
+# ===========================================================================
+
+name: ${COMPOSE_PROJECT_NAME:-odoo}
+
+# Bounded logs. Without this a chatty Odoo fills the disk and takes the host
+# down with it - which is a far more common outage than any application bug.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+
+  # -----------------------------------------------------------------------
+  # PostgreSQL
+  # -----------------------------------------------------------------------
+  db:
+    image: postgres:${POSTGRES_VERSION:-16.15-alpine3.24}
+    restart: unless-stopped
+    # NO `ports:`. The database is reachable only from the backend network.
+    # Exposing 5432 to the host is the single most common way an Odoo
+    # deployment ends up with a publicly readable database.
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+      PGDATA: /var/lib/postgresql/data/pgdata
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgresql.conf
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - wal-archive:/var/lib/postgresql/wal_archive
+      - ./config/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./config/postgres/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # -U/-d must match the real role and database, otherwise pg_isready
+      # reports healthy while Odoo's actual credentials are rejected.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} -q"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    networks:
+      - backend
+    logging: *default-logging
+    stop_grace_period: 60s
+
+  # -----------------------------------------------------------------------
+  # Odoo
+  # -----------------------------------------------------------------------
+  odoo:
+    # The tag is mandatory and must be the exact tag promoted from DEV.
+    image: ${ODOO_IMAGE:?set ODOO_IMAGE}:${ODOO_IMAGE_TAG:?pin an immutable tag, never latest}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    # NO `ports:`. nginx is the only ingress.
+    environment:
+      # The official odoo image reads HOST/PORT/USER/PASSWORD.
+      HOST: db
+      PORT: 5432
+      USER: ${POSTGRES_USER}
+      PASSWORD: ${POSTGRES_PASSWORD}
+      ENVIRONMENT: ${ENVIRONMENT:-dev}
+      ODOO_DB_NAME: ${ODOO_DB_NAME:?ODOO_DB_NAME is required}
+      ODOO_DB_MAXCONN: ${ODOO_DB_MAXCONN:-64}
+      ODOO_ADMIN_PASSWD: ${ODOO_ADMIN_PASSWD:?ODOO_ADMIN_PASSWD is required}
+      ODOO_WORKERS: ${ODOO_WORKERS:-0}
+      ODOO_MAX_CRON_THREADS: ${ODOO_MAX_CRON_THREADS:-1}
+      ODOO_LIMIT_MEMORY_SOFT: ${ODOO_LIMIT_MEMORY_SOFT:-2147483648}
+      ODOO_LIMIT_MEMORY_HARD: ${ODOO_LIMIT_MEMORY_HARD:-2684354560}
+      ODOO_LIMIT_TIME_CPU: ${ODOO_LIMIT_TIME_CPU:-60}
+      ODOO_LIMIT_TIME_REAL: ${ODOO_LIMIT_TIME_REAL:-120}
+      ODOO_LIMIT_REQUEST: ${ODOO_LIMIT_REQUEST:-8192}
+      ODOO_LIST_DB: ${ODOO_LIST_DB:-False}
+      ODOO_PROXY_MODE: ${ODOO_PROXY_MODE:-True}
+      ODOO_LOG_LEVEL: ${ODOO_LOG_LEVEL:-info}
+    volumes:
+      - odoo-filestore:/var/lib/odoo
+    networks:
+      - backend
+      - frontend
+    logging: *default-logging
+    stop_grace_period: 60s
+
+  # -----------------------------------------------------------------------
+  # nginx
+  # -----------------------------------------------------------------------
+  proxy:
+    image: nginx:${NGINX_VERSION:-1.31.4-alpine3.24}
+    restart: unless-stopped
+    depends_on:
+      - odoo
+    ports:
+      # Bound to BIND_ADDRESS, 127.0.0.1 by default, so a stack cannot be
+      # published to the internet by accident. Overlays widen it explicitly.
+      - "${BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-8080}:80"
+      - "${BIND_ADDRESS:-127.0.0.1}:${HTTPS_PORT:-8443}:443"
+    environment:
+      ODOO_DOMAIN: ${ODOO_DOMAIN:-localhost}
+      # CRITICAL: without this filter nginx's entrypoint would substitute
+      # EVERY $variable in the template, blanking $host, $remote_addr and
+      # $proxy_add_x_forwarded_for and silently breaking proxying and TLS.
+      NGINX_ENVSUBST_FILTER: "^ODOO_DOMAIN$$"
+    volumes:
+      - ./config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/nginx/snippets:/etc/nginx/snippets:ro
+      # *.template in this directory is rendered into /etc/nginx/conf.d/.
+      - ./config/nginx/conf.d:/etc/nginx/templates:ro
+      - ./config/nginx/tls:/etc/nginx/tls:ro
+      - nginx-cache:/var/cache/nginx
+      - certbot-webroot:/var/www/certbot
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8081/stub_status || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - frontend
+    logging: *default-logging
+
+networks:
+  # frontend carries proxy <-> odoo only.
+  frontend:
+    driver: bridge
+  # backend carries odoo <-> db and is marked internal, so nothing on it can
+  # reach the internet even if a container is compromised.
+  backend:
+    driver: bridge
+    internal: true
+
+volumes:
+  db-data:
+  wal-archive:
+  odoo-filestore:
+  nginx-cache:
+  certbot-webroot:

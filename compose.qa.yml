@@ -1,0 +1,43 @@
+# ===========================================================================
+# QA / UAT overlay - 157.10.100.230
+# ===========================================================================
+# QA exists to be a faithful rehearsal of production. It therefore runs the
+# SAME image tag that passed DEV, with production's worker model and
+# production's security posture - against its OWN database, never PROD's.
+#   docker compose -f compose.yml -f compose.qa.yml up -d
+# ===========================================================================
+
+services:
+
+  db:
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+    # Restart policy matches production so QA reproduces recovery behaviour.
+    restart: always
+
+  odoo:
+    restart: always
+    # NO host addons mount. Addons come from the image, exactly as in PROD.
+    volumes:
+      - odoo-filestore:/var/lib/odoo
+    environment:
+      # Multi-worker, so QA exercises the same concurrency and the same
+      # worker-recycling behaviour that production will hit.
+      ODOO_WORKERS: ${ODOO_WORKERS:-3}
+      ODOO_MAX_CRON_THREADS: ${ODOO_MAX_CRON_THREADS:-1}
+      # Matches production. The entrypoint refuses to start otherwise.
+      ODOO_LIST_DB: "False"
+      ODOO_LOG_LEVEL: ${ODOO_LOG_LEVEL:-info}
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+
+  proxy:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 512m
