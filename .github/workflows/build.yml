@@ -123,7 +123,7 @@ jobs:
       # Scan gate
       # -------------------------------------------------------------------
       - name: Trivy scan (SARIF for the Security tab)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.image-tag }}
           format: sarif
@@ -139,7 +139,7 @@ jobs:
           category: trivy-image
 
       - name: Enforce the vulnerability policy
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.image-tag }}
           format: table
@@ -151,7 +151,7 @@ jobs:
           exit-code: "1"
 
       - name: Generate an SBOM
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: image
           image-ref: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.image-tag }}
@@ -171,7 +171,24 @@ jobs:
       # -------------------------------------------------------------------
       # Push only after every gate above has passed.
       # -------------------------------------------------------------------
+      # Publishing is conditional on credentials being configured. Without
+      # them the build and every scan gate still run on each push - which is
+      # most of the value - rather than the pipeline sitting permanently red
+      # and training everyone to ignore it.
+      - name: Check whether Docker Hub credentials are configured
+        id: registry
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          if [ -n "$DOCKERHUB_USERNAME" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::DOCKERHUB_USERNAME is not set - the image was built and scanned but NOT published. Nothing can be deployed until it is."
+          fi
+
       - name: Log in to Docker Hub
+        if: steps.registry.outputs.configured == 'true'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -182,6 +199,7 @@ jobs:
 
       - name: Push
         id: push
+        if: steps.registry.outputs.configured == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -201,6 +219,7 @@ jobs:
             VERSION=${{ steps.meta.outputs.image-tag }}
 
       - name: Attest build provenance
+        if: steps.registry.outputs.configured == 'true'
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
@@ -213,8 +232,17 @@ jobs:
             echo "| field | value |"
             echo "|---|---|"
             echo "| image | \`${IMAGE_NAME}:${{ steps.meta.outputs.image-tag }}\` |"
-            echo "| digest | \`${{ steps.push.outputs.digest }}\` |"
             echo "| commit | \`${{ github.sha }}\` |"
-            echo ""
-            echo "Deploy with: \`scripts/deploy.sh -e dev -t ${{ steps.meta.outputs.image-tag }}\`"
+            if [ "${{ steps.registry.outputs.configured }}" = "true" ]; then
+              echo "| digest | \`${{ steps.push.outputs.digest }}\` |"
+              echo "| published | yes |"
+              echo ""
+              echo "Deploy with: \`scripts/deploy.sh -e dev -t ${{ steps.meta.outputs.image-tag }}\`"
+            else
+              echo "| published | **NO** |"
+              echo ""
+              echo "Built and scanned, but not published: DOCKERHUB_USERNAME and"
+              echo "DOCKERHUB_TOKEN are not configured. Nothing can be deployed"
+              echo "until they are - see docs/ci-cd.md."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
