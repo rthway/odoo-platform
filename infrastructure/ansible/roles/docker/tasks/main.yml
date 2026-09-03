@@ -38,6 +38,10 @@
     signed_by: /etc/apt/keyrings/docker.asc
     state: present
     enabled: true
+    # deb822_repository needs python3-debian, and under --check it will not
+    # install it for itself unless asked. Without this the dry run fails with
+    # "python3-debian must be installed to use check mode".
+    install_python_debian: true
 
 - name: Install Docker Engine and the Compose plugin
   ansible.builtin.apt:
