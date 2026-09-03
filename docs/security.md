@@ -19,6 +19,43 @@
 | Secrets | GitHub Environment Secrets → `.env` at 0600 | Ansible |
 | Backups | age encryption | `backup.sh` |
 
+## Docker publishes past ufw
+
+**ufw cannot restrict a Docker-published port.** Docker inserts its own
+iptables rules into the forward path ahead of ufw's INPUT chain, so the packet
+never reaches the ufw rule - while `ufw status` displays a source restriction
+that reads as though it were enforced.
+
+This was not theoretical. Measured from the public internet, with ufw
+reporting the exporters as limited to the monitoring host:
+
+```
+157.10.100.223:9100  node_exporter      HTTP 200
+157.10.100.223:9187  postgres_exporter  HTTP 200   (database internals)
+157.10.100.223:8081  cAdvisor           HTTP 200
+157.10.100.232:3100  Loki               queryable, returned real log labels
+```
+
+The fix is in the `DOCKER-USER` chain, which Docker guarantees not to clobber
+and evaluates before its own accept rules. The rules live in ufw's
+`after.rules`, so they survive reboots and `ufw reload`.
+
+Two details that are easy to get wrong, and were:
+
+- **Match container ports, not published ports.** DNAT runs before the FORWARD
+  chain, so DOCKER-USER sees the port *inside* the container. cAdvisor is
+  published as `8081:8080`; a rule naming 8081 does nothing. It stayed open
+  through a first attempt that appeared to work, because node_exporter and
+  postgres_exporter happen to publish on their container ports.
+- **Do not default-deny.** A blanket `DROP` in DOCKER-USER also breaks
+  container egress and inter-container traffic. The policy drops the sensitive
+  ports for sources outside the private segment and leaves everything else
+  alone.
+
+Verified after the fix: all seven internal ports return no response from
+outside, while Odoo and Grafana still serve on 80/443 and Prometheus still
+scrapes every exporter.
+
 ## Defence in depth: the database manager
 
 Odoo's database manager can create, drop and restore databases over HTTP. It
@@ -137,7 +174,6 @@ Recorded deliberately rather than left implicit:
 
 | Risk | Why it is accepted | Mitigation |
 |---|---|---|
-| **Docker-published ports bypass ufw** | Docker inserts its own iptables rules ahead of ufw's INPUT chain, so a published port is reachable even when ufw appears to deny it. This affects Loki's 3100 on OPS, the only monitoring port not bound to loopback. | Loki binds to the host's INTERNAL address only, which is a private RFC1918 network behind NAT with no port forward. The ufw rule is kept because it is correct if traffic ever arrives via the host stack, but it is not the control doing the work. Proper filtering would need rules in the `DOCKER-USER` chain - recorded as an improvement, not claimed as done. |
 | The deploy user is in the `docker` group, which is root-equivalent | Deployments would otherwise need passwordless sudo, which is no better | Key-only SSH, fail2ban, dedicated account |
 | promtail mounts the Docker socket read-only | Required for container log discovery | Read-only, and the container is not exposed |
 | cAdvisor runs privileged | Required to read cgroup and device statistics | Reachable only from OPS via ufw |

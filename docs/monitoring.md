@@ -18,9 +18,12 @@ Agents on DEV, QA and PROD: node_exporter (9100), cAdvisor (8081),
 postgres_exporter (9187), promtail. All three exporters are reachable **only
 from OPS**, enforced by ufw.
 
+Grafana is served by nginx on **80/443**: <https://157.10.100.232>
+
+Prometheus and Alertmanager are not exposed. Reach them over a tunnel:
+
 ```bash
-docker compose -f compose.observability.yml up -d
-ssh -L 3000:127.0.0.1:3000 devops@157.10.100.232
+ssh -L 9090:127.0.0.1:9090 -L 9093:127.0.0.1:9093 devops@157.10.100.232
 ```
 
 ### One exception to localhost binding

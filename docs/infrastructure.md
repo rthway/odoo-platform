@@ -102,14 +102,22 @@ Nothing else is exposed today.
 | Port | Host | Service | Reachable from |
 |---|---|---|---|
 | 22 | all | SSH | admin networks |
-| 443 | PROD | nginx (HTTPS) | users |
-| 80 | PROD | nginx redirect + ACME | users |
-| 8080, 8443 | DEV, QA | nginx | internal network |
-| 9100 | app hosts | node_exporter | **192.168.2.56 only** |
-| 9187 | app hosts | postgres_exporter | **192.168.2.56 only** |
-| 8081 | app hosts | cAdvisor | **192.168.2.56 only** |
-| 3000/9090/9093 | OPS | Grafana/Prometheus/Alertmanager | **localhost only** |
-| 3100 | OPS | Loki | app hosts |
+| 80, 443 | DEV, QA, PROD | nginx → Odoo | **public** |
+| 80, 443 | OPS | nginx → Grafana | **public** |
+| 9100 | app hosts | node_exporter | 192.168.2.0/24 only |
+| 9187 | app hosts | postgres_exporter | 192.168.2.0/24 only |
+| 8081 → 8080 | app hosts | cAdvisor | 192.168.2.0/24 only |
+| 3100 | OPS | Loki | 192.168.2.0/24 only |
+| 9090, 9093 | OPS | Prometheus, Alertmanager | **localhost only** |
+| 3000 | OPS | Grafana direct | **localhost only** (nginx is the way in) |
+
+All environments serve Odoo on **80/443**. DEV and QA used 8080/8443
+originally, which meant every URL carried a port and DEV did not resemble
+production at the layer users touch.
+
+The restrictions above are enforced in the `DOCKER-USER` chain, **not** by ufw
+alone - see [`security.md`](security.md#docker-publishes-past-ufw) for why that
+distinction matters.
 
 ### Never exposed
 

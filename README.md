@@ -105,14 +105,25 @@ common way an Odoo deployment ends up with a publicly readable database.
 
 | Role | Address | Runs | Ingress |
 |---|---|---|---|
-| **DEV** | `157.10.100.223` | Odoo, PostgreSQL, nginx, exporters | 8080/8443 |
-| **QA / UAT** | `157.10.100.230` | Odoo, PostgreSQL, nginx, exporters | 8080/8443 |
-| **PROD** | `157.10.100.231` | Odoo, PostgreSQL, nginx, exporters | 80/443 |
-| **OPS** | `157.10.100.232` | Prometheus, Grafana, Loki, Alertmanager, backups | localhost only |
+| **DEV** | `157.10.100.223` | Odoo, PostgreSQL, nginx, exporters | **80/443** |
+| **QA / UAT** | `157.10.100.230` | Odoo, PostgreSQL, nginx, exporters | **80/443** |
+| **PROD** | `157.10.100.231` | Odoo, PostgreSQL, nginx, exporters | **80/443** |
+| **OPS** | `157.10.100.232` | Prometheus, Grafana, Loki, Alertmanager, backups | **80/443** (Grafana only) |
 
-Grafana, Prometheus and Alertmanager bind to `127.0.0.1` and are reached over
-an SSH tunnel. None of them has authentication strong enough to face the
-internet, so none of them does.
+| Service | URL |
+|---|---|
+| Odoo DEV | <https://157.10.100.223> |
+| Odoo QA | <https://157.10.100.230> |
+| Odoo PROD | <https://157.10.100.231> |
+| Grafana | <https://157.10.100.232> |
+
+**Grafana is the only monitoring service exposed**, and only through nginx with
+TLS and a rate-limited login. Prometheus and Alertmanager stay bound to
+`127.0.0.1` and are reached over an SSH tunnel — Grafana has real
+authentication, and those two have none at all.
+
+Certificates are self-signed until real DNS names exist, so browsers will warn.
+Production refuses to configure without a real certificate.
 
 ---
 
