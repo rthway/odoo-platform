@@ -103,6 +103,37 @@ Variables: `DOCKERHUB_NAMESPACE`, `APP_DIR`, `DEV_URL`, `QA_URL`, `PROD_URL`.
 Production secrets live in the `production` environment, so a workflow run
 targeting `dev` cannot read them.
 
+## Configured state
+
+Set up and verified on 2026-09-03:
+
+| | Value |
+|---|---|
+| `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` | set; Build publishes successfully |
+| `DOCKERHUB_NAMESPACE` | `rthway` |
+| `APP_DIR` | `/opt/odoo-platform` |
+| `DEV_URL` / `QA_URL` / `PROD_URL` | the three hosts |
+| `dev` / `qa` / `production` environments | `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`, `SSH_KNOWN_HOSTS` |
+
+Each environment has its **own** deploy key (`github-actions-dev`, `-qa`,
+`-prod`), generated for this purpose and installed into
+`~devops/.ssh/authorized_keys` on the matching host. No personal key is used
+for deployment, and compromising one environment's key does not grant access
+to the others. All three were verified to authenticate before the secrets
+were set.
+
+`SSH_KNOWN_HOSTS` holds each host's real ed25519 key, collected with
+`ssh-keyscan`, so `StrictHostKeyChecking=yes` has something to check against.
+
+> Rebuilding a host regenerates its SSH host key and wipes
+> `authorized_keys`. After any rebuild, reinstall that environment's deploy
+> public key and refresh its `SSH_KNOWN_HOSTS` secret, or its deployments
+> will fail host-key verification.
+
+First published image: `rthway/odoo-platform:2026.09.03-64976d2`
+(643 MB, digest `sha256:ffe6b5cf…`), together with `sha-64976d2` and
+`latest`.
+
 ## Setting it up
 
 ```bash
