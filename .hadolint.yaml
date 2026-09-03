@@ -1,0 +1,12 @@
+---
+failure-threshold: warning
+
+ignored:
+  # DL3008: we pin the base image by digest-bearing tag and rebuild it on a
+  # schedule; pinning every apt package version as well makes security
+  # updates impossible to apply without editing the Dockerfile each time.
+  - DL3008
+
+trustedRegistries:
+  - docker.io
+  - ghcr.io

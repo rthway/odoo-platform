@@ -1,0 +1,29 @@
+---
+# Relaxed where GitHub Actions forces our hand, strict everywhere it matters.
+extends: default
+
+rules:
+  line-length:
+    max: 140
+    level: warning
+  # GitHub Actions requires the `on:` key, which yamllint reads as the
+  # boolean true. Disabling this rule is the standard workaround.
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: false
+  comments:
+    min-spaces-from-content: 1
+  document-start:
+    present: false
+  indentation:
+    spaces: 2
+    indent-sequences: consistent
+  braces:
+    max-spaces-inside: 1
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: false
+
+ignore: |
+  .venv/
+  monitoring/grafana/dashboards/

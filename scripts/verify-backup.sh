@@ -33,6 +33,19 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Resolve a working Python 3. It is `python3` on Linux hosts and often just
+# `python` elsewhere - and on Windows `command -v python3` finds the Microsoft
+# Store alias stub, which exists but is not an interpreter. So each candidate
+# is executed, not merely located.
+PYTHON=""
+for _candidate in python3 python; do
+    if "${_candidate}" -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1; then
+        PYTHON="${_candidate}"
+        break
+    fi
+done
+[[ -n "${PYTHON}" ]] || { echo "a working python3 is required but none was found" >&2; exit 1; }
+
 log()  { printf '%s [verify] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 die()  { printf '%s [verify] FAIL: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2; exit 1; }
 
@@ -45,7 +58,7 @@ MANIFEST="${SET_DIR}/manifest.json"
 # Level 1: checksum integrity
 # ---------------------------------------------------------------------------
 log "verifying checksums against manifest"
-python3 - "${SET_DIR}" <<'PY' || die "checksum verification FAILED"
+"${PYTHON}" - "${SET_DIR}" <<'PY' || die "checksum verification FAILED"
 import hashlib, json, pathlib, sys
 
 set_dir = pathlib.Path(sys.argv[1])

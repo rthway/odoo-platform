@@ -1,0 +1,293 @@
+---
+# ===========================================================================
+# Deploy to PRODUCTION (157.10.100.231)
+# ===========================================================================
+# Manual only, and gated on the protected `production` environment, which
+# requires a human reviewer to approve before any step below runs.
+#
+# The sequence is deliberate:
+#   pre-flight -> APPROVAL -> backup -> verify backup -> deploy ->
+#   (optional) migrate -> health check -> smoke test -> keep or roll back
+#
+# The backup happens AFTER approval and IMMEDIATELY before the change, so the
+# recovery point is minutes old rather than hours.
+# ===========================================================================
+name: Deploy PROD
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag ALREADY VALIDATED IN QA"
+        required: true
+        type: string
+      run_migration:
+        description: "Run an Odoo module update (schema migration). One-way - see docs/rollback.md"
+        required: false
+        default: false
+        type: boolean
+      migration_modules:
+        description: "Modules to update if run_migration is true"
+        required: false
+        default: "all"
+        type: string
+
+concurrency:
+  # Never two production deployments at once, and never cancel one midway:
+  # a cancelled deploy leaves the host in an unknown state.
+  group: deploy-prod
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+
+  # -----------------------------------------------------------------------
+  # Runs BEFORE the approval gate, so a reviewer is asked to approve
+  # something that has already been checked rather than a blind request.
+  # -----------------------------------------------------------------------
+  preflight:
+    name: Pre-flight checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      image-digest: ${{ steps.verify.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify the tag is published and immutable
+        id: verify
+        env:
+          IMAGE: ${{ vars.DOCKERHUB_NAMESPACE || 'rthway' }}/odoo-platform
+          TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          [ "$TAG" != "latest" ] || { echo "'latest' is mutable and must never reach production"; exit 1; }
+
+          if ! docker manifest inspect "docker.io/${IMAGE}:${TAG}" > /dev/null 2>&1; then
+            echo "image docker.io/${IMAGE}:${TAG} does not exist"
+            exit 1
+          fi
+          DIGEST=$(docker buildx imagetools inspect "docker.io/${IMAGE}:${TAG}" \
+                    --format '{{.Manifest.Digest}}' 2>/dev/null || echo unknown)
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "image  : docker.io/${IMAGE}:${TAG}"
+          echo "digest : $DIGEST"
+
+      - name: Warn if a migration is requested
+        if: ${{ inputs.run_migration }}
+        run: |
+          {
+            echo "### ⚠ Schema migration requested"
+            echo ""
+            echo "Modules: \`${{ inputs.migration_modules }}\`"
+            echo ""
+            echo "Odoo migrations are **one-way**. After this runs, rolling the"
+            echo "image back will NOT revert the database. Reverting would mean"
+            echo "restoring the pre-migration backup and losing every"
+            echo "transaction committed after it."
+            echo ""
+            echo "Approve only if that trade-off is understood and accepted."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Deployment summary for the approver
+        run: |
+          {
+            echo "### Production deployment awaiting approval"
+            echo ""
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| tag | \`${{ inputs.image_tag }}\` |"
+            echo "| digest | \`${{ steps.verify.outputs.digest }}\` |"
+            echo "| migration | ${{ inputs.run_migration && format('YES - {0}', inputs.migration_modules) || 'no' }} |"
+            echo "| requested by | @${{ github.actor }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # -----------------------------------------------------------------------
+  # The `production` environment carries the required-reviewer rule. This job
+  # does not start until a reviewer approves in the GitHub UI.
+  # -----------------------------------------------------------------------
+  deploy:
+    name: Deploy to production
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment:
+      name: production
+      url: ${{ vars.PROD_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Record what is currently running
+        id: current
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          APP_DIR: ${{ vars.APP_DIR || '/opt/odoo-platform' }}
+        run: |
+          set -euo pipefail
+          # Captured before anything changes, so the rollback target is known
+          # even if later steps fail in unexpected ways.
+          CURRENT=$(ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes \
+            "${SSH_USER}@${SSH_HOST}" \
+            "cat '${APP_DIR}/.deploy-state/current' 2>/dev/null || echo none")
+          echo "previous-tag=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "currently running: $CURRENT"
+
+      # -------------------------------------------------------------------
+      # Backup. deploy.sh takes and verifies one itself for prod; this runs
+      # it explicitly first so a backup failure aborts before the image is
+      # even pulled, and so the backup path is visible in the workflow log.
+      # -------------------------------------------------------------------
+      - name: Backup and verify
+        id: backup
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          APP_DIR: ${{ vars.APP_DIR || '/opt/odoo-platform' }}
+        run: |
+          set -euo pipefail
+          SET=$(ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes \
+            "${SSH_USER}@${SSH_HOST}" \
+            "cd '${APP_DIR}' && ./scripts/backup.sh -e prod -l pre-deploy | tail -1")
+          echo "backup-set=$SET" >> "$GITHUB_OUTPUT"
+          echo "backup set: $SET"
+
+          ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes \
+            "${SSH_USER}@${SSH_HOST}" \
+            "cd '${APP_DIR}' && ./scripts/verify-backup.sh -s '$SET' --checksums"
+
+      # -------------------------------------------------------------------
+      - name: Deploy
+        id: deploy
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          APP_DIR: ${{ vars.APP_DIR || '/opt/odoo-platform' }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          # deploy.sh rolls back automatically if its health checks fail.
+          ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes \
+            "${SSH_USER}@${SSH_HOST}" \
+            "cd '${APP_DIR}' && ./scripts/deploy.sh -e prod -t '${IMAGE_TAG}'"
+
+      - name: Database migration
+        if: ${{ inputs.run_migration }}
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          APP_DIR: ${{ vars.APP_DIR || '/opt/odoo-platform' }}
+          MODULES: ${{ inputs.migration_modules }}
+          BACKUP_SET: ${{ steps.backup.outputs.backup-set }}
+        run: |
+          set -euo pipefail
+          # Reuses the backup taken minutes ago rather than taking another,
+          # so the recovery point is the state before the deployment began.
+          ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes \
+            "${SSH_USER}@${SSH_HOST}" \
+            "cd '${APP_DIR}' && ./scripts/migrate.sh -e prod -m '${MODULES}' --backup-set '${BACKUP_SET}'"
+
+      # -------------------------------------------------------------------
+      - name: Post-deployment verification from outside
+        env:
+          PROD_URL: ${{ vars.PROD_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PROD_URL}" ]; then
+            echo "::warning::PROD_URL is not set - external verification skipped"
+            exit 0
+          fi
+
+          serving=0
+          for i in $(seq 1 12); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${PROD_URL}/web/login" || echo 000)
+            echo "attempt $i: HTTP $code"
+            if [ "$code" = "200" ] || [ "$code" = "303" ]; then
+              serving=1
+              break
+            fi
+            sleep 10
+          done
+          [ "$serving" = "1" ] || { echo "production is not serving the login page"; exit 1; }
+
+          # Production must never expose the database manager.
+          dbcode=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${PROD_URL}/web/database/manager" || echo 000)
+          echo "database manager: HTTP $dbcode"
+          [ "$dbcode" != "200" ] || { echo "SECURITY: database manager is exposed in production"; exit 1; }
+
+          # TLS must be in force.
+          case "${PROD_URL}" in
+            https://*)
+              hsts=$(curl -sI --max-time 15 "${PROD_URL}/web/login" | grep -ci '^strict-transport-security' || true)
+              [ "$hsts" -ge 1 ] || echo "::warning::HSTS header not present"
+              ;;
+            *) echo "::warning::PROD_URL is not https" ;;
+          esac
+
+      # -------------------------------------------------------------------
+      # Explicit failure path. deploy.sh already attempts an automatic
+      # rollback; this reports it loudly and leaves the operator what they
+      # need, rather than letting a red X speak for itself.
+      # -------------------------------------------------------------------
+      - name: On failure
+        if: failure()
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          APP_DIR: ${{ vars.APP_DIR || '/opt/odoo-platform' }}
+        run: |
+          set +e
+          echo "::error::Production deployment FAILED"
+          echo "Deployment state on the host:"
+          ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes \
+            "${SSH_USER}@${SSH_HOST}" \
+            "cd '${APP_DIR}' && cat .deploy-state/current 2>/dev/null; tail -20 .deploy-state/history.log 2>/dev/null; docker compose -f compose.yml -f compose.prod.yml ps"
+          {
+            echo "### ❌ Production deployment failed"
+            echo ""
+            echo "- attempted tag: \`${{ inputs.image_tag }}\`"
+            echo "- previous tag: \`${{ steps.current.outputs.previous-tag }}\`"
+            echo "- pre-deploy backup: \`${{ steps.backup.outputs.backup-set }}\`"
+            echo ""
+            echo "\`deploy.sh\` attempts an automatic rollback on health-check"
+            echo "failure. Confirm the running version before acting."
+            echo ""
+            echo "Manual rollback:"
+            echo '```'
+            echo "ssh <user>@<prod> 'cd /opt/odoo-platform && ./scripts/rollback.sh -e prod -t ${{ steps.current.outputs.previous-tag }}'"
+            echo '```'
+            echo ""
+            echo "If a migration ran, an image rollback is NOT sufficient."
+            echo "Follow docs/disaster-recovery.md."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summary
+        if: success()
+        run: |
+          {
+            echo "### ✅ Production deployment succeeded"
+            echo ""
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| tag | \`${{ inputs.image_tag }}\` |"
+            echo "| digest | \`${{ needs.preflight.outputs.image-digest }}\` |"
+            echo "| previous | \`${{ steps.current.outputs.previous-tag }}\` |"
+            echo "| backup | \`${{ steps.backup.outputs.backup-set }}\` |"
+            echo "| migration | ${{ inputs.run_migration && 'YES' || 'no' }} |"
+            echo "| approved via | \`production\` environment |"
+          } >> "$GITHUB_STEP_SUMMARY"

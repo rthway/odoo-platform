@@ -29,6 +29,19 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Resolve a working Python 3. It is `python3` on Linux hosts and often just
+# `python` elsewhere - and on Windows `command -v python3` finds the Microsoft
+# Store alias stub, which exists but is not an interpreter. So each candidate
+# is executed, not merely located.
+PYTHON=""
+for _candidate in python3 python; do
+    if "${_candidate}" -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1; then
+        PYTHON="${_candidate}"
+        break
+    fi
+done
+[[ -n "${PYTHON}" ]] || { echo "a working python3 is required but none was found" >&2; exit 1; }
+
 log() { printf '%s [prune] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 
 if [[ -r "${COMPOSE_DIR}/.env" ]]; then
@@ -50,7 +63,7 @@ log "policy: ${KEEP_DAILY} daily, ${KEEP_WEEKLY} weekly, ${KEEP_MONTHLY} monthly
 (( APPLY == 1 )) && log "MODE: APPLY (backups will be deleted)" \
                  || log "MODE: DRY RUN (nothing will be deleted; pass --apply)"
 
-python3 - "${ROOT}" "${KEEP_DAILY}" "${KEEP_WEEKLY}" "${KEEP_MONTHLY}" "${APPLY}" <<'PY'
+"${PYTHON}" - "${ROOT}" "${KEEP_DAILY}" "${KEEP_WEEKLY}" "${KEEP_MONTHLY}" "${APPLY}" <<'PY'
 import datetime as dt
 import pathlib
 import shutil
