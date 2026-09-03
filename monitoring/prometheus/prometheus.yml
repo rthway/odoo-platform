@@ -4,6 +4,15 @@
 # ===========================================================================
 # Every target carries an `environment` label. Without it, an alert saying
 # "Odoo is down" cannot tell an operator whether to get out of bed.
+#
+# Targets use the INTERNAL 192.168.2.0/24 addresses, not the public
+# 157.10.100.x ones. All four hosts sit behind the same gateway and always
+# source traffic from their internal address, so scraping the public address
+# hairpins through NAT for no benefit - and the firewall rule that permits
+# the scrape has to name the internal address to match at all.
+#
+#   dev  192.168.2.6     qa   192.168.2.52
+#   prod 192.168.2.217   ops  192.168.2.56
 # ===========================================================================
 
 global:
@@ -43,11 +52,11 @@ scrape_configs:
     static_configs:
       - targets: ["node-exporter:9100"]
         labels: {environment: ops, instance_name: ops-232}
-      - targets: ["157.10.100.223:9100"]
+      - targets: ["192.168.2.6:9100"]
         labels: {environment: dev, instance_name: dev-223}
-      - targets: ["157.10.100.230:9100"]
+      - targets: ["192.168.2.52:9100"]
         labels: {environment: qa, instance_name: qa-230}
-      - targets: ["157.10.100.231:9100"]
+      - targets: ["192.168.2.217:9100"]
         labels: {environment: prod, instance_name: prod-231}
 
   # -----------------------------------------------------------------------
@@ -57,11 +66,11 @@ scrape_configs:
     static_configs:
       - targets: ["cadvisor:8080"]
         labels: {environment: ops, instance_name: ops-232}
-      - targets: ["157.10.100.223:8081"]
+      - targets: ["192.168.2.6:8081"]
         labels: {environment: dev, instance_name: dev-223}
-      - targets: ["157.10.100.230:8081"]
+      - targets: ["192.168.2.52:8081"]
         labels: {environment: qa, instance_name: qa-230}
-      - targets: ["157.10.100.231:8081"]
+      - targets: ["192.168.2.217:8081"]
         labels: {environment: prod, instance_name: prod-231}
     metric_relabel_configs:
       # cAdvisor is extremely verbose. Keeping only what the dashboards and
@@ -80,11 +89,11 @@ scrape_configs:
   # -----------------------------------------------------------------------
   - job_name: postgres
     static_configs:
-      - targets: ["157.10.100.223:9187"]
+      - targets: ["192.168.2.6:9187"]
         labels: {environment: dev, instance_name: dev-223}
-      - targets: ["157.10.100.230:9187"]
+      - targets: ["192.168.2.52:9187"]
         labels: {environment: qa, instance_name: qa-230}
-      - targets: ["157.10.100.231:9187"]
+      - targets: ["192.168.2.217:9187"]
         labels: {environment: prod, instance_name: prod-231}
 
   # -----------------------------------------------------------------------
@@ -96,11 +105,11 @@ scrape_configs:
     params:
       module: [odoo_http]
     static_configs:
-      - targets: ["http://157.10.100.223:8080/web/health"]
+      - targets: ["http://192.168.2.6:8080/web/health"]
         labels: {environment: dev, instance_name: dev-223, service: odoo}
-      - targets: ["http://157.10.100.230:8080/web/health"]
+      - targets: ["http://192.168.2.52:8080/web/health"]
         labels: {environment: qa, instance_name: qa-230, service: odoo}
-      - targets: ["http://157.10.100.231/web/health"]
+      - targets: ["http://192.168.2.217/web/health"]
         labels: {environment: prod, instance_name: prod-231, service: odoo}
     relabel_configs:
       # The standard blackbox indirection: the target becomes a parameter to
