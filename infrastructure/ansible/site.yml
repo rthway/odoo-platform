@@ -192,51 +192,57 @@
   hosts: app
   become: false
   tags: [verify]
-  # Every one of these asserts a thing this run creates. Under --check none
-  # of it exists, so the whole play would report failures for work that was
-  # never meant to have happened yet.
-  when: not ansible_check_mode
 
   tasks:
-    - name: Confirm Docker is usable by the deploy user
-      become: true
-      become_user: "{{ deploy_user }}"
-      ansible.builtin.command: docker ps
-      changed_when: false
+    # One guarded block, not a play-level `when` - that is not a valid play
+    # attribute and Ansible refuses to parse the playbook at all.
+    #
+    # Every assertion here concerns something this run creates, so under
+    # --check none of it exists and the play would report failures for work
+    # that was never meant to have happened yet.
+    - name: Verify the host came out as intended
+      when: not ansible_check_mode
+      block:
 
-    - name: Confirm the environment file has strict permissions
-      ansible.builtin.stat:
-        path: "{{ app_dir }}/.env"
-      register: envfile
+        - name: Confirm Docker is usable by the deploy user
+          become: true
+          become_user: "{{ deploy_user }}"
+          ansible.builtin.command: docker ps
+          changed_when: false
 
-    - name: Assert the environment file is 0600
-      ansible.builtin.assert:
-        that:
-          - envfile.stat.exists
-          - envfile.stat.mode == "0600"
-        fail_msg: "{{ app_dir }}/.env is missing or not 0600"
+        - name: Confirm the environment file has strict permissions
+          ansible.builtin.stat:
+            path: "{{ app_dir }}/.env"
+          register: envfile
 
-    - name: Confirm the firewall is active
-      become: true
-      ansible.builtin.command: ufw status
-      register: ufw_status
-      changed_when: false
+        - name: Assert the environment file is 0600
+          ansible.builtin.assert:
+            that:
+              - envfile.stat.exists
+              - envfile.stat.mode == "0600"
+            fail_msg: "{{ app_dir }}/.env is missing or not 0600"
 
-    - name: Assert the firewall is enabled
-      ansible.builtin.assert:
-        that:
-          - "'Status: active' in ufw_status.stdout"
-        fail_msg: "ufw is not active on {{ inventory_hostname }}"
+        - name: Confirm the firewall is active
+          become: true
+          ansible.builtin.command: ufw status
+          register: ufw_status
+          changed_when: false
 
-    - name: Confirm the backup cron entry exists
-      become: true
-      become_user: "{{ deploy_user }}"
-      ansible.builtin.command: crontab -l
-      register: crontab_out
-      changed_when: false
+        - name: Assert the firewall is enabled
+          ansible.builtin.assert:
+            that:
+              - "'Status: active' in ufw_status.stdout"
+            fail_msg: "ufw is not active on {{ inventory_hostname }}"
 
-    - name: Assert the backup job is scheduled
-      ansible.builtin.assert:
-        that:
-          - "'odoo-backup-' + env_name in crontab_out.stdout"
-        fail_msg: "No backup cron entry on {{ inventory_hostname }}"
+        - name: Confirm the backup cron entry exists
+          become: true
+          become_user: "{{ deploy_user }}"
+          ansible.builtin.command: crontab -l
+          register: crontab_out
+          changed_when: false
+
+        - name: Assert the backup job is scheduled
+          ansible.builtin.assert:
+            that:
+              - "'odoo-backup-' + env_name in crontab_out.stdout"
+            fail_msg: "No backup cron entry on {{ inventory_hostname }}"
