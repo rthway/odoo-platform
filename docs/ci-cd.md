@@ -4,10 +4,10 @@
 
 | Workflow | Trigger | Blocking |
 |---|---|---|
-| `ci.yml` | PR, push to main/develop | Yes — `CI passed` |
+| `ci.yml` | PR, push to dev/qa/main | Yes — `CI passed` |
 | `security.yml` | PR, push, weekly cron | Yes — `Security passed` |
-| `build.yml` | Push to develop/main, tags | Produces the artifact |
-| `deploy-dev.yml` | After a successful Build on develop | — |
+| `build.yml` | Push to dev, tags | Produces the artifact |
+| `deploy-dev.yml` | After a successful Build on dev | — |
 | `deploy-qa.yml` | Manual | — |
 | `deploy-prod.yml` | Manual + **approval** | — |
 | `provision.yml` | Manual | Runs Ansible against a host |

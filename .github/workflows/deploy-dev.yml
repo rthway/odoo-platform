@@ -2,7 +2,7 @@
 # ===========================================================================
 # Deploy to DEV (157.10.100.223)
 # ===========================================================================
-# Automatic: every successful Build on develop lands here. DEV is where a
+# Automatic: every successful Build on `dev` lands here. DEV is where a
 # change first meets a real database, so it must be cheap and unattended.
 #
 # The Docker daemon is NOT exposed to GitHub Actions. The runner opens an SSH
@@ -15,7 +15,7 @@ on:
   workflow_run:
     workflows: [Build]
     types: [completed]
-    branches: [develop]
+    branches: [dev]
   workflow_dispatch:
     inputs:
       image_tag:

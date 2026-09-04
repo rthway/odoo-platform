@@ -277,7 +277,7 @@ In order:
    ([`ci-cd.md`](ci-cd.md)).
 4. **Provision** — `ansible-playbook site.yml --limit dev --check`, then apply;
    then QA, then OPS, then PROD.
-5. **First build** — merge to `develop` and let Build produce a scanned image.
+5. **First build** — merge to `dev` and let Build produce a scanned image.
 6. **DEV** — deploy, initialise the database, verify.
 7. **QA** — promote the same tag; run integration and Odoo tests.
 8. **Monitoring** — confirm all four targets are `UP` and Loki has labels.
