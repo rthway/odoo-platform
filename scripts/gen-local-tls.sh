@@ -11,6 +11,10 @@
 # that has no real certificate.
 #
 # Usage: scripts/gen-local-tls.sh [-d localhost] [-o config/nginx/tls]
+#                                 [-a extra,names,or,IPs]
+#
+# Every name given is placed in subjectAltName. An address literal becomes an
+# IP: entry, not DNS: - see the note by the config file below.
 # ===========================================================================
 set -Eeuo pipefail
 
@@ -19,11 +23,13 @@ DOMAIN="localhost"
 OUT_DIR="${REPO_DIR}/config/nginx/tls"
 DAYS=365
 FORCE=0
+ALT_NAMES=""
 
-while getopts ":d:o:fh" opt; do
+while getopts ":d:o:a:fh" opt; do
     case "${opt}" in
         d) DOMAIN="${OPTARG}" ;;
         o) OUT_DIR="${OPTARG}" ;;
+        a) ALT_NAMES="${OPTARG}" ;;
         f) FORCE=1 ;;
         h) sed -n '2,14p' "$0"; exit 0 ;;
         *) echo "unknown option -${OPTARG}" >&2; exit 2 ;;
@@ -70,6 +76,40 @@ log "generating a self-signed certificate for ${DOMAIN} (${DAYS} days)"
 # Written next to the output rather than in $TMPDIR: a Git Bash mktemp path
 # ("/tmp/tmp.XXXX") is not a path a native Windows openssl can open, and the
 # failure is an unhelpful "No such file or directory".
+# A name that is an ADDRESS must become an IP: entry. Browsers match an
+# https://<ip>/ URL only against an iPAddress SAN; a DNS: entry holding the
+# same digits never matches. That is how the OPS certificate came to carry
+# DNS:157.10.100.232 and still fail verification in a browser.
+san_entry() {
+    if [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ || "$1" == *:*: ]]; then
+        printf 'IP:%s' "$1"
+    else
+        printf 'DNS:%s' "$1"
+    fi
+}
+
+SANS=""
+_seen=""
+add_san() {
+    [[ -n "$1" ]] || return 0
+    case "|${_seen}|" in *"|$1|"*) return 0 ;; esac
+    _seen="${_seen:+${_seen}|}$1"
+    SANS="${SANS:+${SANS}, }$(san_entry "$1")"
+}
+
+add_san "${DOMAIN}"
+if [[ -n "${ALT_NAMES}" ]]; then
+    IFS=',' read -r -a _extra <<< "${ALT_NAMES}"
+    for _n in "${_extra[@]}"; do
+        add_san "$(printf '%s' "${_n}" | tr -d '[:space:]')"
+    done
+fi
+# Always reachable from the host itself, which is how healthcheck.sh probes.
+add_san "localhost"
+add_san "127.0.0.1"
+
+log "  subjectAltName: ${SANS}"
+
 CONF="${OUT_DIR}/.openssl-selfsigned.cnf"
 trap 'rm -f "${CONF}" "${CONF}.err"' EXIT
 
@@ -85,7 +125,7 @@ O  = Odoo Platform (self-signed)
 CN = ${DOMAIN}
 
 [v3]
-subjectAltName         = DNS:${DOMAIN}, DNS:localhost, IP:127.0.0.1
+subjectAltName         = ${SANS}
 basicConstraints       = critical, CA:FALSE
 keyUsage               = critical, digitalSignature, keyEncipherment
 extendedKeyUsage       = serverAuth

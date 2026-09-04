@@ -231,6 +231,7 @@
       ansible.builtin.command:
         cmd: >-
           ./scripts/gen-local-tls.sh -d {{ grafana_domain | default(ansible_host) }}
+          -a {{ ansible_host }},{{ internal_ip | default(ansible_default_ipv4.address, true) }}
         chdir: "{{ app_dir }}"
         creates: "{{ app_dir }}/config/nginx/tls/fullchain.pem"
       when: not ansible_check_mode

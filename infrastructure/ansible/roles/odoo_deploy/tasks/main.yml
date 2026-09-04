@@ -104,10 +104,20 @@
 
 # A self-signed certificate keeps nginx starting in DEV/QA where no public
 # DNS name exists. Production must use a real certificate; see docs/security.md.
-# `default(..., true)` below, not `default(...)`: prod sets odoo_domain to an
-# EMPTY string, and a plain default only replaces an UNDEFINED value - openssl
-# would be handed -subj "/CN=".
+# Via scripts/gen-local-tls.sh, not a bare `openssl req`. The hand-rolled
+# command passed only -subj "/CN=...", producing a certificate with NO
+# subjectAltName - and every browser since Chrome 58 ignores the legacy
+# Common Name entirely, so such a certificate has no valid names at all and
+# fails verification whatever you type. QA answered 200 to `curl -k` and
+# showed a name error in a browser. The script also puts the host's own
+# addresses in the SAN, which matters because these hosts have no DNS name
+# and are reached by IP.
+#
+# `default(..., true)`, not `default(...)`: prod sets odoo_domain to an EMPTY
+# string, and a plain default only replaces an UNDEFINED value.
 - name: Generate a self-signed certificate when none exists
+  become: true
+  become_user: "{{ deploy_user }}"
   when:
     - not tls_cert.stat.exists
     - env_name != "prod" or prod_allow_self_signed | bool
@@ -115,11 +125,16 @@
     - not ansible_check_mode
   ansible.builtin.command:
     cmd: >-
-      openssl req -x509 -nodes -days 365 -newkey rsa:2048
-      -keyout {{ app_dir }}/config/nginx/tls/privkey.pem
-      -out {{ app_dir }}/config/nginx/tls/fullchain.pem
-      -subj "/CN={{ odoo_domain | default('localhost', true) }}"
+      ./scripts/gen-local-tls.sh
+      -d {{ odoo_domain | default('localhost', true) }}
+      -a {{ ansible_host }},{{ internal_ip | default(ansible_default_ipv4.address, true) }}
+    chdir: "{{ app_dir }}"
     creates: "{{ app_dir }}/config/nginx/tls/fullchain.pem"
+  environment:
+    # The script carries its own production guard. Wire it to the same
+    # variable the assert below uses, so the two cannot disagree.
+    ENVIRONMENT: "{{ env_name }}"
+    ALLOW_SELF_SIGNED_PROD: "{{ 'yes' if prod_allow_self_signed | bool else 'no' }}"
   tags: [tls]
 
 - name: Refuse to leave production without a real certificate
