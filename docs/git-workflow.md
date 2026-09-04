@@ -112,16 +112,29 @@ Configure on `main`, `qa` and `dev`:
 Repeat for each branch (`main`, `qa`, `dev`):
 
 ```bash
-gh api -X PUT repos/:owner/:repo/branches/<branch>/protection \
-  -f 'required_status_checks[strict]=true' \
-  -f 'required_status_checks[contexts][]=CI passed' \
-  -f 'required_status_checks[contexts][]=Security passed' \
-  -F 'enforce_admins=true' \
-  -F 'required_pull_request_reviews[required_approving_review_count]=1' \
-  -F 'required_pull_request_reviews[dismiss_stale_reviews]=true' \
-  -F 'restrictions=null' \
-  -F 'allow_force_pushes=false' \
-  -F 'allow_deletions=false'
+# `strict` and the review counts are BOOLEANS and NUMBERS. Passing them with
+# -f sends strings, and the API rejects the whole request with
+# `"true" is not a boolean` - so send a JSON body instead.
+cat > /tmp/protection.json <<'JSON'
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": ["CI passed", "Security passed"]
+  },
+  "enforce_admins": true,
+  "required_pull_request_reviews": {
+    "required_approving_review_count": 1,
+    "dismiss_stale_reviews": true
+  },
+  "restrictions": null,
+  "allow_force_pushes": false,
+  "allow_deletions": false
+}
+JSON
+
+for b in main qa dev; do
+  gh api -X PUT "repos/:owner/:repo/branches/$b/protection" --input /tmp/protection.json
+done
 ```
 
 `CI passed` and `Security passed` are aggregate jobs. Adding a job to either
