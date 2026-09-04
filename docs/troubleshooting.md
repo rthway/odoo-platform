@@ -45,7 +45,9 @@ deployed at 14:02".
 $DC ps                      # are all three up?
 $DC logs --tail 50 proxy    # is nginx the problem?
 $DC logs --tail 50 odoo
-curl -sv http://127.0.0.1:8080/web/health
+# HTTPS: every environment serves on 443, and port 80 only redirects.
+# -k because DEV/QA (and PROD until it has a DNS name) are self-signed.
+curl -skv https://127.0.0.1/web/health
 ```
 
 | Finding | Meaning |

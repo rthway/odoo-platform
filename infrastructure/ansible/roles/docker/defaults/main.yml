@@ -5,3 +5,23 @@ docker_users: ["{{ deploy_user }}"]
 docker_log_max_size: "20m"
 docker_log_max_file: "5"
 docker_live_restore: true
+
+# Docker 29 defaults to the containerd image store
+# (`driver-type: io.containerd.snapshotter.v1`), which has no
+# /var/lib/docker/image/*/layerdb. cAdvisor v0.52 needs that path to identify
+# a container's read-write layer; without it, it fails to build a container
+# object for EVERY container and exports only raw cgroup series - no image=,
+# no name=, no container_label_*. The scrape config then drops all of it, so
+# Prometheus holds zero container_* metrics fleet-wide while the cAdvisor
+# target still reports `up`.
+#
+# The visible symptom is ContainerDisappeared firing permanently: it is
+# absent() over a metric that no longer exists, so it can neither resolve nor
+# ever detect a real disappearance.
+#
+# false selects the classic overlay2 graph driver, which cAdvisor understands.
+# On a host that ALREADY has images under the containerd store, flipping this
+# hides them: images must be re-pulled and containers recreated. On a host
+# that has never been provisioned it costs nothing, which is why this is
+# worth setting before QA and PROD are built rather than after.
+docker_use_containerd_snapshotter: false
