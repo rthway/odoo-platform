@@ -164,7 +164,31 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
+
+      # The action hard-fails with "Dependency review is not supported on this
+      # repository" when the Dependency graph is switched off, which put a red
+      # X on EVERY pull request while telling us nothing about dependencies.
+      # Probe first, so a missing feature is a warning and a real vulnerable
+      # dependency is still a failure.
+      - name: Is the dependency graph available?
+        id: depgraph
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          if gh api "repos/${GITHUB_REPOSITORY}/dependency-graph/sbom" >/dev/null 2>&1; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            msg="Dependency review SKIPPED - the Dependency graph is"
+            msg="$msg disabled for this repository. Enable it under Settings"
+            msg="$msg -> Code security -> Dependency graph; until then"
+            msg="$msg vulnerable dependencies are not reviewed on PRs."
+            echo "::warning::$msg"
+          fi
+
       - uses: actions/dependency-review-action@v4
+        if: steps.depgraph.outputs.available == 'true'
         with:
           fail-on-severity: high
           comment-summary-in-pr: always
