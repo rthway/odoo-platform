@@ -25,10 +25,12 @@ server {
     }
 
     location / {
-        # $host carries no port, so a bare `https://$host` redirect sends the
-        # browser to 443 - which is not published on DEV or QA, where nginx
-        # is on 8443. HTTPS_PUBLIC_PORT is substituted at render time and is
-        # empty in production, where 443 is the real port.
+        # $host carries no port, so a bare `https://$host` redirect sends
+        # the browser to 443. That is correct everywhere today - DEV, QA,
+        # PROD and OPS all publish 443 - so HTTPS_PUBLIC_PORT is empty and
+        # this renders as a clean https://host/ URL. It exists for the case
+        # where HTTPS_PORT is overridden to something else, which would
+        # otherwise redirect to a port that is not published.
         return 301 https://$host${HTTPS_PUBLIC_PORT}$request_uri;
     }
 }

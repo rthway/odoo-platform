@@ -127,6 +127,48 @@ else
     fail "MONITORING_BIND is not 127.0.0.1 - Prometheus would be published unauthenticated"
 fi
 
+# Every application environment must serve on the DEFAULT ports, on all
+# interfaces. This is asserted because it is invisible until a user tries the
+# host: nginx starts happily on any port, every container reports healthy, and
+# the failure only shows up as "https://157.10.100.230/ does not load". The
+# equivalent OPS check above did not cover dev/qa/prod.
+if "${PYTHON}" - "${TMP}" <<'PY'
+import pathlib, sys, yaml
+
+tmp = pathlib.Path(sys.argv[1])
+failures = []
+
+for env in ("dev", "qa", "prod"):
+    path = tmp / f"resolved-{env}.yml"
+    if not path.exists():
+        failures.append(f"{env}: no resolved config to check")
+        continue
+    cfg = yaml.safe_load(path.read_text())
+    ports = cfg["services"]["proxy"].get("ports", [])
+
+    published = sorted(str(p.get("published")) for p in ports)
+    if published != ["443", "80"]:
+        failures.append(f"{env}: the proxy publishes {published}, expected 80 and 443")
+
+    # 127.0.0.1 here would mean the host answers only itself - the stack looks
+    # perfectly healthy from the inside and is unreachable from everywhere else.
+    for p in ports:
+        if p.get("host_ip") not in (None, "", "0.0.0.0", "::"):
+            failures.append(
+                f"{env}: the proxy binds {p.get('published')} to {p.get('host_ip')!r}, "
+                "so the host is not reachable from the network"
+            )
+
+for f in failures:
+    print(f"    {f}")
+sys.exit(1 if failures else 0)
+PY
+then
+    pass "dev, qa and prod all publish nginx on 80/443, on all interfaces"
+else
+    fail "an environment does not serve Odoo on the default ports"
+fi
+
 # ---------------------------------------------------------------------------
 # 2. Environment isolation
 # ---------------------------------------------------------------------------

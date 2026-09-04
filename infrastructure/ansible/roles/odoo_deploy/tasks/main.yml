@@ -104,6 +104,9 @@
 
 # A self-signed certificate keeps nginx starting in DEV/QA where no public
 # DNS name exists. Production must use a real certificate; see docs/security.md.
+# `default(..., true)` below, not `default(...)`: prod sets odoo_domain to an
+# EMPTY string, and a plain default only replaces an UNDEFINED value - openssl
+# would be handed -subj "/CN=".
 - name: Generate a self-signed certificate when none exists
   when:
     - not tls_cert.stat.exists
@@ -115,7 +118,7 @@
       openssl req -x509 -nodes -days 365 -newkey rsa:2048
       -keyout {{ app_dir }}/config/nginx/tls/privkey.pem
       -out {{ app_dir }}/config/nginx/tls/fullchain.pem
-      -subj "/CN={{ odoo_domain | default('localhost') }}"
+      -subj "/CN={{ odoo_domain | default('localhost', true) }}"
     creates: "{{ app_dir }}/config/nginx/tls/fullchain.pem"
   tags: [tls]
 
