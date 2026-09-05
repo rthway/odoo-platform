@@ -17,7 +17,7 @@ sequenceDiagram
     participant R as Reviewer
     participant P as PROD .231
 
-    D->>B: merge to develop
+    D->>B: merge to dev
     B->>B: build, verify labels, Trivy scan
     B->>H: push 2026.09.03-a1b2c3d
     H->>DEV: pull that tag
@@ -34,7 +34,7 @@ sequenceDiagram
 
 ## DEV
 
-Automatic on every successful Build from `develop`. To deploy a chosen tag:
+Automatic on every successful Build from `dev`. To deploy a chosen tag:
 
 ```bash
 gh workflow run deploy-dev.yml -f image_tag=2026.09.03-a1b2c3d

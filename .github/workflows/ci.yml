@@ -1,6 +1,6 @@
 ---
 # ===========================================================================
-# CI - runs on every pull request and every push to main/develop
+# CI - runs on every pull request and every push to dev/qa/main
 # ===========================================================================
 # Fast, cheap checks that must pass before anything is built or deployed.
 # Image building lives in build.yml; deep security scanning in security.yml.
@@ -9,16 +9,19 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, qa, dev]
   pull_request:
-    branches: [main, develop]
+    branches: [main, qa, dev]
   workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
-  # Superseded PR runs are cancelled, but never on main/develop where the
+  # Superseded PR runs are cancelled, but never on an environment branch where the
   # result is a record of what that commit actually passed.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/develop' }}
+  cancel-in-progress: >-
+    ${{ github.ref != 'refs/heads/main'
+        && github.ref != 'refs/heads/qa'
+        && github.ref != 'refs/heads/dev' }}
 
 permissions:
   contents: read

@@ -12,11 +12,15 @@
 name: Deploy QA
 
 on:
+  # Merging into `qa` promotes to the QA server. Still no build step: the
+  # image was built when the commit was on `dev`, and resolve-image finds it.
+  push:
+    branches: [qa]
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Image tag validated in DEV (e.g. 2026.09.03-a1b2c3d)"
-        required: true
+        description: "Image tag validated in DEV. Empty = resolve from the commit."
+        required: false
         type: string
       skip_integration_tests:
         description: "Skip integration tests (emergency use only)"
@@ -33,17 +37,45 @@ permissions:
 
 jobs:
 
-  verify-image:
-    name: Verify the image exists and was scanned
+  resolve-image:
+    name: Resolve and verify the image
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
     steps:
+      # Full history: resolving walks back through ancestors.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # A merge into `qa` creates a NEW commit that Build never saw, so
+      # sha-<that commit> does not exist. The artifact to promote is the one
+      # built for the dev commit merged in, so walk ancestors until a
+      # published sha- tag turns up. Promotion stays byte-exact: QA runs the
+      # image DEV tested, never a rebuild of the same source.
       - name: Confirm the tag is published
+        id: resolve
         env:
           IMAGE: ${{ vars.DOCKERHUB_NAMESPACE || 'rthway' }}/odoo-platform
-          TAG: ${{ inputs.image_tag }}
+          GIVEN: ${{ inputs.image_tag }}
         run: |
           set -euo pipefail
+          if [ -n "${GIVEN}" ]; then
+            TAG="${GIVEN}"
+          else
+            TAG=""
+            for sha in $(git rev-list --max-count=50 HEAD); do
+              cand="sha-$(echo "${sha}" | cut -c1-7)"
+              if docker manifest inspect "docker.io/${IMAGE}:${cand}" >/dev/null 2>&1; then
+                TAG="${cand}"; echo "resolved ${TAG} from ${sha}"; break
+              fi
+            done
+            [ -n "${TAG}" ] || {
+              echo "::error::No published image for the last 50 ancestors of $(git rev-parse HEAD). Nothing here was built on dev."
+              exit 1; }
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           [ "$TAG" != "latest" ] || { echo "refusing to promote the mutable tag 'latest'"; exit 1; }
           # Promoting a tag that does not exist should fail here, in seconds,
           # rather than half-way through a deployment on the QA host.
@@ -56,7 +88,7 @@ jobs:
 
   deploy:
     name: Deploy to QA
-    needs: verify-image
+    needs: resolve-image
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment:
@@ -103,7 +135,7 @@ jobs:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
           APP_DIR: ${{ vars.APP_DIR || '/opt/odoo-platform' }}
-          IMAGE_TAG: ${{ inputs.image_tag }}
+          IMAGE_TAG: ${{ needs.resolve-image.outputs.tag }}
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
@@ -173,8 +205,8 @@ jobs:
           {
             echo "### QA deployment"
             echo ""
-            echo "- tag: \`${{ inputs.image_tag }}\` (same image as DEV, not rebuilt)"
-            echo "- integration tests: ${{ inputs.skip_integration_tests && 'SKIPPED' || 'run' }}"
+            echo "- tag: \`${{ needs.resolve-image.outputs.tag }}\` (same image as DEV, not rebuilt)"
+            echo "- integration tests: ${{ inputs.inputs.skip_integration_tests && 'SKIPPED' || 'run' }}"
             echo "- result: ${{ job.status }}"
             echo ""
             if [ "${{ job.status }}" = "success" ]; then

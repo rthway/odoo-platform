@@ -2,7 +2,7 @@
 # ===========================================================================
 # Security scanning
 # ===========================================================================
-# Runs on pull requests, on main/develop, and on a weekly schedule.
+# Runs on pull requests, on the environment branches, and weekly.
 #
 # The schedule matters as much as the PR trigger: a vulnerability disclosed
 # after a commit merges will never be found by a push-triggered scan alone.
@@ -11,9 +11,9 @@ name: Security
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, qa, dev]
   pull_request:
-    branches: [main, develop]
+    branches: [main, qa, dev]
   schedule:
     # 03:00 UTC every Monday.
     - cron: "0 3 * * 1"

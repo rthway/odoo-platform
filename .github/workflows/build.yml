@@ -12,8 +12,12 @@
 name: Build
 
 on:
+  # ONLY `dev` builds. qa and main promote the artifact that was built here,
+  # they never rebuild it - which is what makes "the image QA tested is the
+  # image production runs" true rather than merely intended. A hotfix that
+  # never passed through dev needs an explicit workflow_dispatch build.
   push:
-    branches: [develop, main]
+    branches: [dev]
     tags: ["v*.*.*"]
   workflow_dispatch:
   # Called by deploy workflows that need an image built from a given ref.

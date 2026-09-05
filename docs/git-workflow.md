@@ -2,61 +2,85 @@
 
 ## Branches
 
-| Branch | Lives | Deploys to | Protected |
+Three permanent branches, one per environment. The branch IS the record of
+what that environment runs.
+
+| Branch | Deploys to | Server | Protected |
 |---|---|---|---|
-| `main` | Permanent | PROD | Yes |
-| `develop` | Permanent | DEV | Yes |
-| `feature/*` | Until merged | — | No |
-| `bugfix/*` | Until merged | — | No |
-| `release/*` | Until merged | QA | No |
-| `hotfix/*` | Until merged | PROD (expedited) | No |
+| `dev` | DEV | 157.10.100.223 | Yes |
+| `qa` | QA / UAT | 157.10.100.230 | Yes |
+| `main` | PRODUCTION | 157.10.100.231 | Yes |
+| `feature/*` | — | — | No |
+| `bugfix/*` | — | — | No |
+| `hotfix/*` | PROD (expedited) | — | No |
+
+Monitoring (157.10.100.232) has no branch of its own: it serves every
+environment and is provisioned from `main`.
 
 `main` always reflects what is in production. If they diverge, `main` is
 wrong and that is an incident in itself — the whole audit trail depends on
 that correspondence.
 
-## Normal flow
+## One artifact, promoted
+
+Only `dev` builds images. `qa` and `main` promote the artifact `dev`
+produced; they never rebuild it.
+
+That is the whole guarantee: **the image production runs is the exact image
+QA tested**, byte for byte, not a rebuild of the same source. A rebuild can
+differ — a base image moves, a transitive dependency publishes, a cache
+misses — and then production runs something no one tested.
+
+Merging into `qa` or `main` creates a new commit that Build never saw, so
+there is no image tagged for it. The deploy workflows walk back through
+ancestors to the newest commit that DOES have a published `sha-<short>`
+image, and promote that. If none exists in the last 50 commits, the deploy
+fails rather than building one.
 
 ```mermaid
 flowchart LR
-    F["feature/*"] -->|PR| DEVL[develop]
-    DEVL -->|auto| DEV[DEV .223]
-    DEVL -->|cut| REL["release/*"]
-    REL -->|manual| QA[QA .230]
-    REL -->|PR + approval| MAIN[main]
-    MAIN -->|manual + approval| PROD[PROD .231]
-    MAIN -->|merge back| DEVL
+    F["feature/*"] -->|PR| D[dev]
+    D -->|Build + auto-deploy| DEV[DEV .223]
+    D -->|PR| Q[qa]
+    Q -->|promote, auto| QA[QA .230]
+    Q -->|PR + approval| M[main]
+    M -->|promote + REVIEWER GATE| P[PROD .231]
 ```
 
+## Normal flow
+
 ```bash
-git switch develop && git pull
+git switch dev && git pull
 git switch -c feature/invoice-export
 # ... work ...
 git push -u origin feature/invoice-export
-gh pr create --base develop
+gh pr create --base dev
 ```
 
-Merging to `develop` triggers Build, then an automatic DEV deployment.
+Merging to `dev` triggers Build, then an automatic DEV deployment.
 
-## Releasing
+## Promoting
 
 ```bash
-git switch -c release/1.4.0 develop
-git push -u origin release/1.4.0
+# DEV looks good -> QA
+gh pr create --base qa --head dev --title "Promote to QA"
+# merge; Deploy QA runs on push and resolves the tag DEV built
+
+# QA passed -> PRODUCTION
+gh pr create --base main --head qa --title "Promote to production"
+# merge; Deploy PROD runs, then PARKS at the production reviewer gate
 ```
 
-Then run **Deploy QA** with the tag Build produced. When QA passes:
+Merging to `main` asks for a production deployment. It does not perform one:
+the deploy job binds the `production` environment, so the run waits for a
+required reviewer exactly as a manual dispatch does.
+
+Tag the release once it is live:
 
 ```bash
-gh pr create --base main --head release/1.4.0 --title "Release 1.4.0"
-# after review and CI, merge, then:
 git switch main && git pull
 git tag -a v1.4.0 -m "Release 1.4.0" && git push origin v1.4.0
-git switch develop && git merge main && git push
 ```
-
-Run **Deploy PROD** with the **same tag QA validated**. Never a freshly built
-one — that would discard the entire point of the promotion model.
 
 ## Hotfixes
 
@@ -66,12 +90,17 @@ git switch -c hotfix/1.4.1-session-fix main
 gh pr create --base main
 ```
 
-After merging to `main`, **merge back into `develop`** immediately. A hotfix
-that exists only on `main` is silently reverted by the next release.
+After merging to `main`, **merge it back down into `qa` and `dev`**
+immediately. A hotfix that exists only on `main` is silently reverted by the
+next promotion.
+
+A hotfix branch never passed through `dev`, so no image was built for it.
+Run **Build** manually (`workflow_dispatch`) on the hotfix branch first, or
+the production deploy will find no artifact to promote and refuse.
 
 ## Branch protection
 
-Configure on `main` and `develop`:
+Configure on `main`, `qa` and `dev`:
 
 - Require a pull request
 - Require the status checks **CI passed** and **Security passed**
@@ -80,17 +109,32 @@ Configure on `main` and `develop`:
 - Dismiss stale approvals on new commits
 - Restrict force pushes and deletion
 
+Repeat for each branch (`main`, `qa`, `dev`):
+
 ```bash
-gh api -X PUT repos/:owner/:repo/branches/main/protection \
-  -f 'required_status_checks[strict]=true' \
-  -f 'required_status_checks[contexts][]=CI passed' \
-  -f 'required_status_checks[contexts][]=Security passed' \
-  -F 'enforce_admins=true' \
-  -F 'required_pull_request_reviews[required_approving_review_count]=1' \
-  -F 'required_pull_request_reviews[dismiss_stale_reviews]=true' \
-  -F 'restrictions=null' \
-  -F 'allow_force_pushes=false' \
-  -F 'allow_deletions=false'
+# `strict` and the review counts are BOOLEANS and NUMBERS. Passing them with
+# -f sends strings, and the API rejects the whole request with
+# `"true" is not a boolean` - so send a JSON body instead.
+cat > /tmp/protection.json <<'JSON'
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": ["CI passed", "Security passed"]
+  },
+  "enforce_admins": true,
+  "required_pull_request_reviews": {
+    "required_approving_review_count": 1,
+    "dismiss_stale_reviews": true
+  },
+  "restrictions": null,
+  "allow_force_pushes": false,
+  "allow_deletions": false
+}
+JSON
+
+for b in main qa dev; do
+  gh api -X PUT "repos/:owner/:repo/branches/$b/protection" --input /tmp/protection.json
+done
 ```
 
 `CI passed` and `Security passed` are aggregate jobs. Adding a job to either

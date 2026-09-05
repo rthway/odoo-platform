@@ -177,7 +177,7 @@ This is enforced, not merely intended:
 
 ```mermaid
 flowchart TD
-    A[Merge to develop] --> B[Build: image + Trivy scan]
+    A[Merge to dev] --> B[Build: image + Trivy scan]
     B -->|CRITICAL/HIGH fixable| FAIL[Blocked — never pushed]
     B -->|clean| C[Push to Docker Hub]
     C --> D[Deploy DEV automatically]
@@ -220,26 +220,26 @@ hard gate in `scripts/deploy.sh`, not a checklist item.
 ```mermaid
 gitGraph
     commit id: "main"
-    branch develop
+    branch dev
     commit
     branch feature/invoice-export
     commit
     commit
-    checkout develop
+    checkout dev
     merge feature/invoice-export tag: "PR + CI"
     commit id: "→ DEV"
     branch release/1.4.0
     commit id: "→ QA"
     checkout main
     merge release/1.4.0 tag: "→ PROD"
-    checkout develop
+    checkout dev
     merge main
 ```
 
 | Branch | Purpose | Protection |
 |---|---|---|
 | `main` | Reflects production | PR + CI + review, no direct push |
-| `develop` | Integration; deploys to DEV | PR + CI |
+| `dev` | Integration; deploys to DEV | PR + CI |
 | `feature/*` | New work | — |
 | `bugfix/*` | Non-urgent fixes | — |
 | `release/*` | QA validation | — |
@@ -377,7 +377,7 @@ facing a new schema. That case is an incident, not a rollback — see
 |---|---|---|
 | `ci.yml` | PR, push | Lint, config assertions, Ansible, tests, real Odoo integration |
 | `security.yml` | PR, push, weekly | Gitleaks, CodeQL, Trivy, dependency review |
-| `build.yml` | Push to develop/main, tags | Build, verify labels, scan, push, attest provenance |
+| `build.yml` | Push to dev, tags | Build, verify labels, scan, push, attest provenance |
 | `deploy-dev.yml` | Automatic after Build | Deploy + smoke test |
 | `deploy-qa.yml` | Manual | Same tag + integration and Odoo tests |
 | `deploy-prod.yml` | Manual + **approval** | Backup, deploy, migrate, verify, roll back on failure |
@@ -465,7 +465,7 @@ dashboard expressions), `amtool` (config plus **10/10 routing cases**),
 ### Repository
 
 - Published at <https://github.com/rthway/odoo-platform>
-- `main` and `develop` protected: PR required, **CI passed** and
+- `main`, `qa` and `dev` protected: PR required, **CI passed** and
   **Security passed** required, 1 approval, stale reviews dismissed, force
   pushes and deletions blocked
 - Environments `dev`, `qa` and `production` created; **production requires a
